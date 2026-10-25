@@ -45,6 +45,19 @@ export const session = {
   set: (accountId: string | null) => safeSet(SESSION_KEY, accountId),
 };
 
+const CART_KEY = 'stackr:cart:v1';
+const THEME_KEY = 'stackr:theme';
+
+export const cartStore = {
+  get: <T,>(fallback: T): T => { const raw = safeGet(CART_KEY); if (!raw) return fallback; try { return JSON.parse(raw) as T; } catch { return fallback; } },
+  set: (value: unknown) => safeSet(CART_KEY, JSON.stringify(value)),
+};
+
+export const themePref = {
+  get: () => safeGet(THEME_KEY),
+  set: (theme: string) => safeSet(THEME_KEY, theme),
+};
+
 export const langPref = {
   get: () => safeGet(LANG_KEY),
   set: (lang: string) => safeSet(LANG_KEY, lang),

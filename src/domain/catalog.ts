@@ -4,7 +4,7 @@
 import type { Account, DB, Localized, Order, SellerProfile, Service, ServiceExtra } from './types';
 import { DAY, iso } from './rules';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const L = (de: string, en: string): Localized => ({ de, en });
 
@@ -26,11 +26,7 @@ function services(sellerId: string): Service[] {
     id: `${sellerId}-${id}`, sellerId, kind: 'farm', name, description, tiers: FARM_TIERS, extras: FARM_EXTRAS, active: true,
   });
   return [
-    mat('elytra', L('Elytra', 'Elytra'), L('Frisch aus End-Städten geholt.', 'Fetched fresh from End cities.'), L('Stück', 'pieces')),
-    mat('mace', L('Streitkolben', 'Mace'), L('Inklusive Heavy Core aus Trial Chambers.', 'Including the heavy core from trial chambers.'), L('Stück', 'pieces')),
-    mat('netherite', L('Netheritbarren', 'Netherite ingots'), L('Antiker Schutt abgebaut und verarbeitet.', 'Ancient debris mined and smelted.'), L('Barren', 'ingots')),
-    mat('pearls', L('Enderperlen', 'Ender pearls'), L('Gefarmt oder getauscht, je nach Menge.', 'Farmed or traded, depending on amount.'), L('Stacks (16)', 'stacks (16)')),
-    mat('kit', L('Netherite-Kit', 'Netherite kit'), L('Rüstung und Werkzeug, Verzauberungen nach Absprache.', 'Armour and tools, enchantments by agreement.'), L('Sets', 'sets')),
+    mat('items', L('Material-Lieferung', 'Material delivery'), L('Alles aus der Item-Liste von Minecraft 26.3, als ein Auftrag aus dem Warenkorb.', 'Anything from the Minecraft 26.3 item list, as one order from the cart.'), L('Stück', 'pieces')),
     farm('iron', L('Eisenfarm', 'Iron farm'), L('Golem-Farm mit Dorfbewohnern.', 'Golem farm with villagers.')),
     farm('raid', L('Raidfarm', 'Raid farm'), L('Totems, Smaragde und mehr.', 'Totems, emeralds and more.')),
     farm('wool', L('Wollfarm', 'Wool farm'), L('Schafe und Scheren, auf Wunsch alle Farben.', 'Sheep and shears, all colours on request.')),
@@ -66,17 +62,23 @@ export function exampleDB(now: number): DB {
   const db = emptyDB(now);
   const ago = (d: number) => iso(now - d * DAY);
   const mk = (id: string, name: string): Account => ({ id, mcName: name, mcUuid: `example-${id}`, createdAt: ago(20), lastSeenAt: ago(1) });
-  db.accounts.push(mk('acc-ex1', 'Beispiel_Kunde'), mk('acc-ex2', 'Example_Steve'));
+  db.accounts.push(mk('acc-ex1', 'Kiesel_Kai'), mk('acc-ex2', 'Mo0nmoth'));
   const base = (n: number, over: Partial<Order>): Order => ({
-    id: `ord-ex${n}`, number: 1000 + n, clientId: 'acc-ex1', sellerId: 'seller-1', serviceId: 'seller-1-netherite',
+    id: `ord-ex${n}`, number: 1000 + n, clientId: 'acc-ex1', sellerId: 'seller-1', serviceId: 'seller-1-items',
     kind: 'material', title: '', details: '', batches: 1, batchesDelivered: 0, extras: [],
     deliveryMethod: 'place_at_coords', clientProvidesMaterials: false, offer: '', tokens: [], status: 'received',
     history: [], messages: [], createdAt: ago(1), tosAcceptedAt: ago(1), complaints: [], ...over,
   });
   db.orders.push(
     base(1, {
-      title: 'Netheritbarren', quantity: 8, unit: 'Barren', batches: 2, offer: '2 Diamantblöcke',
-      details: '[Beispiel] Für ein Schwert und eine Spitzhacke.',
+      title: '4 Positionen', batches: 2, offer: '2 Diamantblöcke',
+      lines: [
+        { itemId: 'netherite_ingot', de: 'Netheritbarren', en: 'Netherite Ingot', stack: 64, n: 8, unit: 'piece' },
+        { itemId: 'purple_shulker_box', de: 'Violette Shulker-Kiste', en: 'Purple Shulker Box', stack: 1, n: 2, unit: 'piece' },
+        { itemId: 'oak_log', de: 'Eichenstamm', en: 'Oak Log', stack: 64, n: 3, unit: 'stack' },
+        { itemId: 'ender_pearl', de: 'Enderperle', en: 'Ender Pearl', stack: 16, n: 2, unit: 'stack' },
+      ],
+      details: '[Beispiel] Die Netheritbarren gern als zweite Lieferung.',
       coords: { x: 412, y: 70, z: -1280, dimension: 'overworld' },
       status: 'received', createdAt: ago(0.4), tosAcceptedAt: ago(0.4),
       history: [{ status: 'received', at: ago(0.4), by: 'acc-ex1' }],
@@ -84,9 +86,9 @@ export function exampleDB(now: number): DB {
     }),
     base(2, {
       clientId: 'acc-ex2', serviceId: 'seller-1-iron', kind: 'farm', title: 'Eisenfarm', farmTier: 1,
-      extras: ['storage'], deliveryMethod: 'build_at_coords', offer: 'A favour later', details: '[Example] Next to my base, east side.',
+      extras: ['storage'], deliveryMethod: 'build_at_coords', offer: 'Ein Gefallen später', details: '[Beispiel] Neben meiner Basis, Ostseite.',
       coords: { x: -220, y: 64, z: 515, dimension: 'overworld' }, status: 'processing',
-      terms: { price: 'A favour later + 1 stack of iron blocks', days: 4, proposedAt: ago(3), acceptedAt: ago(2.8) },
+      terms: { price: 'Ein Gefallen + 1 Stack Eisenblöcke', days: 4, proposedAt: ago(3), acceptedAt: ago(2.8) },
       createdAt: ago(3.2), clearedAt: ago(2.8), dueAt: ago(-1.2), tosAcceptedAt: ago(3.2),
       history: [
         { status: 'received', at: ago(3.2), by: 'acc-ex2' },
@@ -95,7 +97,8 @@ export function exampleDB(now: number): DB {
       ],
     }),
     base(3, {
-      serviceId: 'seller-1-pearls', title: 'Enderperlen', quantity: 4, unit: 'Stacks (16)', offer: '1 Diamantblock',
+      title: 'Enderperle', offer: '1 Diamantblock',
+      lines: [{ itemId: 'ender_pearl', de: 'Enderperle', en: 'Ender Pearl', stack: 16, n: 4, unit: 'stack' }],
       details: '[Beispiel]', status: 'completed', terms: { price: '1 Diamantblock', days: 2, proposedAt: ago(12), acceptedAt: ago(12) },
       createdAt: ago(12.5), clearedAt: ago(12), dueAt: ago(10), deliveredAt: ago(10.5), completedAt: ago(9), tosAcceptedAt: ago(12.5),
       history: [

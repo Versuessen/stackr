@@ -2,7 +2,8 @@
 // returns a new DB, and throws ActionError (with an i18n key) when a rule forbids the change.
 // A future server would run these same functions, so the rules stay in one place.
 
-import type { DB, FarmTier, ID, Order, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types';
+import type { CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types';
+import { cartTotals, unitOk } from '../domain/items';
 import {
   CONFIG, DAY, activeBlacklist, bulkLimit, checkCanOrder, clientStats, iso, nextLevelState, nowFrom, sellerStats,
 } from '../domain/rules';
@@ -94,6 +95,8 @@ export interface OrderInput {
   details: string;
   quantity?: number;
   unit?: string;
+  lines?: OrderLine[];
+  customLines?: CustomLine[];
   batches: number;
   farmTier?: FarmTier;
   extras: string[];
@@ -125,16 +128,21 @@ export const placeOrder = (input: OrderInput, onId: (id: ID) => void): Mut => (d
     if (input.farmTier > max && !types.has('high_effort')) throw new ActionError('err.tierLocked', { max });
     if (!input.coords) throw new ActionError('err.coordsRequired');
   }
+  let slots = 1;
   if (svc.kind === 'material') {
-    if (!input.quantity || input.quantity < 1) throw new ActionError('err.quantityRequired');
+    const lines = (input.lines ?? []).filter((l) => l.n >= 1 && unitOk(l, l.unit));
+    if (!lines.length && !(input.customLines ?? []).length) throw new ActionError('err.cartEmpty');
+    slots = Math.max(1, cartTotals(lines).slots);
     const limit = bulkLimit(s.levelState.level);
-    if (limit !== null && input.quantity > limit) throw new ActionError('err.bulkLimit', { limit });
+    if (limit !== null && slots > limit) throw new ActionError('err.bulkLimit', { limit });
+    input = { ...input, lines };
   }
-  const batches = Math.max(1, Math.min(input.batches || 1, input.quantity ?? 1));
+  const batches = Math.max(1, Math.min(input.batches || 1, svc.kind === 'material' ? Math.min(3, slots) : 1));
 
   const o: Order = {
     id: uid('ord'), number: db.nextOrderNumber++, clientId: input.clientId, sellerId: s.id, serviceId: svc.id,
     kind: svc.kind, title: input.title.trim(), details: input.details.trim(), quantity: input.quantity, unit: input.unit,
+    lines: input.lines, customLines: input.customLines,
     batches, batchesDelivered: 0, farmTier: svc.kind === 'farm' ? input.farmTier : undefined, extras: input.extras,
     coords: input.coords, deliveryMethod: input.deliveryMethod, clientProvidesMaterials: input.clientProvidesMaterials,
     offer: input.offer.trim(), tokens: input.tokenIds, status: 'received', history: [], messages: [],

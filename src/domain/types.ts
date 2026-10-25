@@ -120,6 +120,23 @@ export interface Complaint {
   resolvedAt?: ISODate;
 }
 
+export type ItemUnit = 'piece' | 'stack' | 'shulker';
+
+/** One line of a material order: an item from the 26.3 list, an amount and a unit. */
+export interface OrderLine {
+  itemId: string; // Minecraft id, e.g. "netherite_ingot"
+  de: string;
+  en: string;
+  stack: number; // stack size of the item (1, 16 or 64)
+  n: number;
+  unit: ItemUnit;
+}
+
+/** A request for something that is not in the item list. */
+export interface CustomLine {
+  text: string;
+}
+
 export interface Order {
   id: ID;
   number: number; // human-readable order number
@@ -131,6 +148,8 @@ export interface Order {
   details: string;
   quantity?: number;
   unit?: string;
+  lines?: OrderLine[]; // material orders from the cart
+  customLines?: CustomLine[]; // "Sonderwunsch" lines from the cart
   batches: number; // client-chosen delivery stages, 1 = all at once
   batchesDelivered: number;
   farmTier?: FarmTier;

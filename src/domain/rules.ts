@@ -20,6 +20,25 @@ export const WAITING_STATUSES: OrderStatus[] = ['received', 'cleared'];
 export const WORKING_STATUSES: OrderStatus[] = ['processing', 'fulfilling'];
 export const PROGRESS_STEPS: OrderStatus[] = ['received', 'cleared', 'processing', 'fulfilling', 'completed'];
 
+/** The seven blocks of the stack tracker. "review" is the approval window after delivery. */
+export const TRACK = ['received', 'cleared', 'processing', 'fulfilling', 'delivered', 'review', 'completed'] as const;
+export type TrackStep = typeof TRACK[number];
+/** Index of the block the order is on now (0–6), or -1 when it was stopped before starting. */
+export function trackIndex(o: Order): number {
+  switch (o.status) {
+    case 'received': return 0;
+    case 'cleared': return 1;
+    case 'processing': return 2;
+    case 'fulfilling': return 3;
+    case 'delivered': return 5;
+    case 'completed': return 6;
+    default: {
+      const last = [...o.history].reverse().find((h) => !['cancelled', 'declined'].includes(h.status));
+      return last ? trackIndex({ ...o, status: last.status }) : 0;
+    }
+  }
+}
+
 export const isOpen = (o: Order) => OPEN_STATUSES.includes(o.status);
 export const nowFrom = (db: DB) => Date.now() + db.clockOffsetDays * DAY;
 export const iso = (t: number) => new Date(t).toISOString();
