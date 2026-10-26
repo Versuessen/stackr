@@ -771,9 +771,10 @@ a.notice-item:hover { border-color: var(--ink); }
 :root { --wip-h: 120px; --top-h: 252px; }
 .topbar { position: sticky; top: 0; z-index: 50; }
 .topbar .hdr { position: static; }
-.wip { min-height: var(--wip-h); display: flex; align-items: center; background: repeating-linear-gradient(-45deg, var(--slime) 0 18px, #d4fa6a 18px 36px); color: #16141b; border-bottom: 2px solid #16141b; }
-.wip-in { display: flex; align-items: center; gap: 16px; width: 100%; padding-top: 12px; padding-bottom: 12px; }
-.wip-in > div { background: rgba(255,255,255,.92); border: 2px solid #16141b; box-shadow: 4px 4px 0 #16141b; border-radius: 12px; padding: 10px 16px; max-width: 900px; }
+.wip { min-height: var(--wip-h); display: flex; align-items: center; background-image: repeating-linear-gradient(-45deg, var(--slime) 0 18px, #d4fa6a 18px 36px); color: #16141b; border-bottom: 2px solid #16141b; background-size: 50.91px 50.91px; animation: wip-slide 2s linear infinite; }
+@keyframes wip-slide { to { background-position: 50.91px 0; } }
+.wip-in { display: flex; align-items: center; justify-content: center; width: 100%; padding-top: 12px; padding-bottom: 12px; }
+.wip-card { display: flex; align-items: center; gap: 14px; background: rgba(255,255,255,.92); border: 2px solid #16141b; box-shadow: 4px 4px 0 #16141b; border-radius: 12px; padding: 10px 16px; max-width: 900px; }
 .wip-ic { width: 44px; height: 44px; flex: none; display: grid; place-items: center; background: #fff; border: 2px solid #16141b; border-radius: 10px; }
 .wip-title { margin: 0; font-family: var(--px); font-size: 22px; line-height: 1.2; color: #16141b; }
 .wip-body { margin: 2px 0 0; font-size: 15px; line-height: 1.45; color: #16141b; }

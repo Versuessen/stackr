@@ -140,10 +140,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <div className="topbar">
       <div className="wip" role="region" aria-label={t('wip.label')}>
         <div className="wrap wip-in">
-          <span className="wip-ic" aria-hidden="true"><Glyph name="info" size={20} color="#16141b" /></span>
-          <div>
-            <p className="wip-title">{t('wip.title')}</p>
-            <p className="wip-body">{t('wip.body')}</p>
+          <div className="wip-card">
+            <span className="wip-ic" aria-hidden="true"><Glyph name="info" size={20} color="#16141b" /></span>
+            <div>
+              <p className="wip-title">{t('wip.title')}</p>
+              <p className="wip-body">{t('wip.body')}</p>
+            </div>
           </div>
         </div>
       </div>
