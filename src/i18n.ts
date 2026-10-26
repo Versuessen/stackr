@@ -771,6 +771,9 @@ const D: Dict = {
   'bs.granted': ['an {name} verschenkt', 'given to {name}'],
   'bs.blacklistBody': ['{name} kann dann nicht mehr bestellen, bis du die Sperre aufhebst.', '{name} can’t order until you lift the block.'],
 
+  'wip.label': ['Hinweis: Baustelle', 'Notice: under construction'],
+  'wip.title': ['Baustelle: Stackr ist noch in Arbeit', 'Under construction: Stackr is a work in progress'],
+  'wip.body': ['Diese Seite ist eine Beta. Bestellungen werden noch nicht wirklich verschickt und Daten liegen nur in deinem Browser. Dinge können sich jederzeit ändern.', 'This site is a beta. Orders aren’t really sent yet and data is stored only in your browser. Things can change at any time.'],
 };
 
 export function translate(lang: Lang, key: string, vars?: Record<string, string | number>): string {

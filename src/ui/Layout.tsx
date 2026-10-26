@@ -137,6 +137,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="app">
       <a className="skip" href="#main">{t('nav.skip')}</a>
+      <div className="topbar">
+      <div className="wip" role="region" aria-label={t('wip.label')}>
+        <div className="wrap wip-in">
+          <span className="wip-ic" aria-hidden="true"><Glyph name="info" size={20} color="#16141b" /></span>
+          <div>
+            <p className="wip-title">{t('wip.title')}</p>
+            <p className="wip-body">{t('wip.body')}</p>
+          </div>
+        </div>
+      </div>
       <header className="hdr">
         <div className="wrap hdr-row">
           <Link to={{ page: 'home' }} className="logo" aria-label={t('nav.homeLabel')}><Logo /><span aria-hidden="true">Stackr</span></Link>
@@ -171,6 +181,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </nav>
       </header>
+      </div>
       <main id="main" tabIndex={-1}>{children}</main>
       <footer className="foot dark">
         <div className="wrap foot-grid">
