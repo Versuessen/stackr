@@ -5,9 +5,10 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 export type Route =
   | { page: 'home' } | { page: 'items' } | { page: 'farm'; id: string } | { page: 'orders' }
   | { page: 'order'; id: string } | { page: 'signin' } | { page: 'notices' } | { page: 'terms' }
-  | { page: 'backstage' } | { page: 'clients' } | { page: 'settings' } | { page: 'beta' };
+  | { page: 'backstage' } | { page: 'clients' } | { page: 'settings' } | { page: 'beta' }
+  | { page: 'privacy' } | { page: 'account' };
 
-const SIMPLE = ['home', 'items', 'orders', 'signin', 'notices', 'terms', 'backstage', 'clients', 'settings', 'beta'] as const;
+const SIMPLE = ['home', 'items', 'orders', 'signin', 'notices', 'terms', 'backstage', 'clients', 'settings', 'beta', 'privacy', 'account'] as const;
 const WITH_ID = ['farm', 'order'] as const;
 
 export function parse(token: string): Route {

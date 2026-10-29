@@ -1,0 +1,26 @@
+# HTTPS front for the code API. Only requests with the shared key reach mc-oauth; everything
+# else gets a bare 404. Certificates are issued automatically (Let's Encrypt).
+{
+	admin off
+}
+
+{$AUTH_API_DOMAIN} {
+	header -Server
+	@stackr {
+		method GET
+		path_regexp ^/code/[0-9]{6}$
+		header X-Stackr-Key {$MC_AUTH_KEY}
+	}
+	handle @stackr {
+		reverse_proxy mc-oauth:8008 {
+			header_down -Server
+		}
+	}
+	handle {
+		respond 404
+	}
+	# No access log: URLs contain one-time codes.
+	log {
+		output discard
+	}
+}

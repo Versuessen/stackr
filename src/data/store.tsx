@@ -1,21 +1,35 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Account, CustomLine, DB, ItemUnit, Lang, OrderLine, SellerProfile } from '../domain/types';
-import { LocalRepository, cartStore, langPref, session, themePref, type Repository } from './repository';
-import { ActionError, apply, markNoticesRead, tick } from './actions';
+import { LocalRepository, cartStore, clearBetaData, langPref, session, themePref } from './repository';
+import { ActionError, apply, signIn, tick } from './actions';
+import { toMut, type Command } from './commands';
+import { ApiError, apiGet, apiPost } from './api';
 import { nowFrom } from '../domain/rules';
+import { emptyDB } from '../domain/catalog';
 import { loadItems, type IndexedItem } from '../domain/items';
 import { translate, type TFn } from '../i18n';
 
-// Swap this for a RemoteRepository when the site goes multi-user.
-const repo: Repository = new LocalRepository();
-
-type Mut = (db: DB, now: number) => void;
+// Two modes, decided once at start:
+//  - live: the API answers /api/state. Data lives on the server; this tab only holds the part
+//    the signed-in person may see, in memory. Nothing personal is written to localStorage.
+//  - beta: no backend configured (or offline preview). Everything runs locally as before.
+export type Mode = 'loading' | 'beta' | 'live';
 export type Theme = 'light' | 'dark';
 export type CartEntry = (OrderLine & { custom?: false }) | (CustomLine & { custom: true });
+export type MfaState = 'needed' | 'enroll' | null;
+
+export interface LiveInfo {
+  mfa: MfaState;
+  pending: { mcName: string } | null;
+  auth: { joinHost: string | null; ready: boolean };
+}
+interface StatePayload extends LiveInfo { mode: 'live' | 'beta'; version: number; me: string | null; db: DB }
 
 export interface Toast { id: number; text: React.ReactNode; action?: { label: string; run: () => void } }
 
 interface StoreValue {
+  mode: Mode;
+  live: LiveInfo | null;
   db: DB;
   now: number;
   me: Account | null;
@@ -25,10 +39,17 @@ interface StoreValue {
   setLang: (l: Lang) => void;
   theme: Theme;
   setTheme: (t: Theme) => void;
-  /** Runs an action. Returns an error message, or null on success. */
-  run: (fn: Mut) => string | null;
+  /** Runs a command. Resolves to an error message, or null on success. */
+  run: (cmd: Command) => Promise<string | null>;
+  /** Same as run, also returns the id of what was created (new orders). */
+  runForId: (cmd: Command) => Promise<{ error: string | null; id?: string }>;
+  /** Re-reads the server state (live). */
+  refresh: () => Promise<void>;
+  signOut: (everywhere?: boolean) => Promise<void>;
+  /** Beta only. */
   replace: (db: DB) => void;
   setSession: (accountId: string | null) => void;
+  betaSignIn: (mcName: string) => string | null;
   readNotices: () => void;
   toasts: Toast[];
   showToast: (text: React.ReactNode, action?: Toast['action']) => void;
@@ -43,6 +64,7 @@ interface StoreValue {
 }
 
 const Ctx = createContext<StoreValue | null>(null);
+const localRepo = new LocalRepository();
 
 function initialLang(): Lang {
   const saved = langPref.get();
@@ -56,8 +78,10 @@ function initialTheme(): Theme {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [db, setDb] = useState<DB>(() => apply(repo.load(), tick));
-  const [sessionId, setSessionId] = useState<string | null>(() => session.get());
+  const [mode, setMode] = useState<Mode>('loading');
+  const [live, setLive] = useState<LiveInfo | null>(null);
+  const [db, setDb] = useState<DB>(() => emptyDB(Date.now()));
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [lang, setLangState] = useState<Lang>(initialLang);
   const [theme, setThemeState] = useState<Theme>(initialTheme);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -70,31 +94,122 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   dbRef.current = db;
   const cartRef = useRef(cart);
   cartRef.current = cart;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const etag = useRef<string | null>(null);
 
   const t = useMemo<TFn>(() => (key, vars) => translate(lang, key, vars), [lang]);
+  const msg = useCallback((e: unknown) => {
+    if (e instanceof ActionError || e instanceof ApiError) return translate(lang, e.key, e.vars);
+    if (e instanceof TypeError) return translate(lang, 'err.offline'); // fetch failed: network
+    console.error(e);
+    return translate(lang, 'err.unknown');
+  }, [lang]);
 
-  const commit = useCallback((next: DB) => {
-    dbRef.current = next;
-    setDb(next);
-    repo.save(next);
+  const applyPayload = useCallback((p: StatePayload) => {
+    dbRef.current = p.db;
+    setDb(p.db);
+    setSessionId(p.me);
+    setLive({ mfa: p.mfa, pending: p.pending, auth: p.auth });
   }, []);
 
-  const run = useCallback((fn: Mut): string | null => {
+  const refresh = useCallback(async () => {
+    if (modeRef.current !== 'live') return;
     try {
-      commit(apply(dbRef.current, fn));
-      return null;
-    } catch (e) {
-      if (e instanceof ActionError) return translate(lang, e.key, e.vars);
-      console.error(e);
-      return translate(lang, 'err.unknown');
-    }
-  }, [commit, lang]);
+      const r = await apiGet<StatePayload>('state', etag.current);
+      if (r.data) { etag.current = r.etag; applyPayload(r.data); }
+    } catch { /* keep showing the last state; next poll retries */ }
+  }, [applyPayload]);
 
-  // Approval windows and level grace periods depend on time passing.
+  // Decide the mode once.
   useEffect(() => {
-    const id = window.setInterval(() => commit(apply(dbRef.current, tick)), 60_000);
+    let done = false;
+    const toBeta = () => {
+      if (done) return; done = true;
+      const local = apply(localRepo.load(), tick);
+      dbRef.current = local; setDb(local);
+      setSessionId(session.get());
+      setMode('beta');
+    };
+    const timer = window.setTimeout(toBeta, 5000);
+    apiGet<StatePayload>('state').then((r) => {
+      if (done) return;
+      if (r.data?.mode === 'live') {
+        done = true;
+        window.clearTimeout(timer);
+        etag.current = r.etag;
+        clearBetaData();
+        applyPayload(r.data);
+        setMode('live');
+      } else { window.clearTimeout(timer); toBeta(); }
+    }, () => { window.clearTimeout(timer); toBeta(); });
+    return () => window.clearTimeout(timer);
+  }, [applyPayload]);
+
+  // Live: pick up changes from the other side (seller replies, status changes).
+  useEffect(() => {
+    if (mode !== 'live') return;
+    const poll = () => { if (document.visibilityState === 'visible') void refresh(); };
+    const id = window.setInterval(poll, 20_000);
+    window.addEventListener('focus', poll);
+    document.addEventListener('visibilitychange', poll);
+    return () => { window.clearInterval(id); window.removeEventListener('focus', poll); document.removeEventListener('visibilitychange', poll); };
+  }, [mode, refresh]);
+
+  // Beta: approval windows and level grace periods depend on time passing.
+  const commitLocal = useCallback((next: DB) => {
+    dbRef.current = next;
+    setDb(next);
+    localRepo.save(next);
+  }, []);
+  useEffect(() => {
+    if (mode !== 'beta') return;
+    const id = window.setInterval(() => commitLocal(apply(dbRef.current, tick)), 60_000);
     return () => window.clearInterval(id);
-  }, [commit]);
+  }, [mode, commitLocal]);
+
+  const me = db.accounts.find((a) => a.id === sessionId) ?? null;
+  const mySeller = me?.sellerId ? db.sellers.find((s) => s.id === me.sellerId) ?? null : null;
+  const meRef = useRef(me);
+  meRef.current = me;
+
+  const runForId = useCallback(async (cmd: Command): Promise<{ error: string | null; id?: string }> => {
+    if (modeRef.current === 'live') {
+      try {
+        const r = await apiPost<{ id?: string; db: DB; version: number }>('command', { cmd });
+        dbRef.current = r.db;
+        setDb(r.db);
+        etag.current = null;
+        return { error: null, id: r.id };
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) void refresh();
+        return { error: msg(e) };
+      }
+    }
+    const actor = meRef.current;
+    if (!actor) return { error: translate(lang, 'err.signInFirst') };
+    let id: string | undefined;
+    try {
+      commitLocal(apply(dbRef.current, toMut(cmd, actor, (x) => { id = x; })));
+      return { error: null, id };
+    } catch (e) { return { error: msg(e) }; }
+  }, [commitLocal, lang, msg, refresh]);
+  const run = useCallback(async (cmd: Command) => (await runForId(cmd)).error, [runForId]);
+
+  const signOut = useCallback(async (everywhere = false) => {
+    if (modeRef.current === 'live') {
+      try { await apiPost(everywhere ? 'auth/logout-all' : 'auth/logout'); } catch { /* cookie is cleared server-side anyway */ }
+      etag.current = null;
+      await refresh();
+    } else { setSessionId(null); session.set(null); }
+  }, [refresh]);
+
+  const betaSignIn = useCallback((mcName: string) => {
+    let id = '';
+    try { commitLocal(apply(dbRef.current, signIn(mcName, (x) => { id = x; }))); } catch (e) { return msg(e); }
+    setSessionId(id); session.set(id);
+    return null;
+  }, [commitLocal, msg]);
 
   useEffect(() => {
     loadItems().then((r) => { setItems(r.items); setItemsVersion(r.version); setItemsState('ready'); }, () => setItemsState('failed'));
@@ -134,17 +249,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       { label: translate(lang, 'common.undo'), run: () => setCart(prev) });
   }, [lang, setCart, showToast]);
 
-  const me = db.accounts.find((a) => a.id === sessionId) ?? null;
-  const mySeller = me?.sellerId ? db.sellers.find((s) => s.id === me.sellerId) ?? null : null;
-
   const value: StoreValue = {
-    db, now: nowFrom(db), me, mySeller, lang, t,
+    mode, live, db, now: nowFrom(db), me, mySeller, lang, t,
     setLang: (l) => { setLangState(l); langPref.set(l); },
     theme, setTheme: (x) => { setThemeState(x); themePref.set(x); },
-    run,
-    replace: (next) => commit(apply(next, tick)),
-    setSession: (id) => { setSessionId(id); session.set(id); },
-    readNotices: () => { if (me) run(markNoticesRead(me.id)); },
+    run, runForId, refresh, signOut,
+    replace: (next) => { if (modeRef.current === 'beta') commitLocal(apply(next, tick)); },
+    setSession: (id) => { if (modeRef.current === 'beta') { setSessionId(id); session.set(id); } },
+    betaSignIn,
+    readNotices: () => { if (me) void run({ type: 'markNoticesRead' }); },
     toasts, showToast, closeToast,
     items, itemsState, itemsVersion, cart, setCart, addToCart, cartBump,
   };

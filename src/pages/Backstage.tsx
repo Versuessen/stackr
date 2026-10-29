@@ -4,9 +4,7 @@ import { Link, useRouter } from '../ui/router';
 import { ConfirmButton, Empty, ErrorLine, Field, PageHead, Stars, StatusChip, TokenPill, fmtDate, fmtN, relDays } from '../ui/components';
 import { useShopStatus } from '../ui/Layout';
 import { orderName, orderSummary } from './Orders';
-import {
-  advanceClock, blacklistClient, clearBlacklist, grantToken, resetTo, setVacation, toggleService, updateSeller,
-} from '../data/actions';
+import { resetTo } from '../data/actions';
 import { DAY, activeBlacklist, clientStats, publicWaitDays, sellerQueue, sellerStats, tokensOf, unusedTokens } from '../domain/rules';
 import type { DB, TokenType } from '../domain/types';
 
@@ -23,8 +21,11 @@ function SubNav() {
 }
 
 function NotSeller() {
-  const { t } = useStore();
-  return <div className="wrap shop"><Empty title={t('bs.notSeller')} action={<Link to={{ page: 'beta' }} className="btn btn-secondary">{t('nav.betaTools')}</Link>} /></div>;
+  const { t, mode, me, live } = useStore();
+  const action = mode === 'beta'
+    ? <Link to={{ page: 'beta' }} className="btn btn-secondary">{t('nav.betaTools')}</Link>
+    : !me || live?.mfa ? <Link to={{ page: 'signin' }} className="btn btn-primary">{live?.mfa ? t('mfa.title') : t('nav.signIn')}</Link> : undefined;
+  return <div className="wrap shop"><Empty title={t('bs.notSeller')} action={action} /></div>;
 }
 
 function Switch({ id, on, onChange, title, body }: { id: string; on: boolean; onChange: (v: boolean) => void; title: string; body: string }) {
@@ -101,8 +102,8 @@ export function BackstagePage() {
         </section>
         <section className="card settings" aria-labelledby="h-set">
           <h2 className="t-title" id="h-set">{t('bs.shop')}</h2>
-          <Switch id="accepting" on={s.accepting} onChange={(v) => run(updateSeller(s.id, me.id, { accepting: v }))} title={t('bs.accepting')} body={t('bs.acceptingBody')} />
-          <Switch id="vacation" on={s.vacation.on} onChange={(v) => run(setVacation(s.id, me.id, v))} title={t('bs.vacation')} body={t('bs.vacationBody')} />
+          <Switch id="accepting" on={s.accepting} onChange={(v) => { void run({ type: 'updateSeller', patch: { accepting: v } }); }} title={t('bs.accepting')} body={t('bs.acceptingBody')} />
+          <Switch id="vacation" on={s.vacation.on} onChange={(v) => { void run({ type: 'setVacation', on: v }); }} title={t('bs.vacation')} body={t('bs.vacationBody')} />
           <div className="preview-note"><span className="t-label mute">{t('bs.clientsSee')}</span><span className={`status ${status.away ? 'away' : ''}`}><i aria-hidden="true" />{status.text}</span></div>
         </section>
       </div>
@@ -148,15 +149,15 @@ export function ClientsPage() {
                 <select className="field" id={`tk-${c.id}`} value={tokenType[c.id] ?? 'priority'} onChange={(e) => setTokenType({ ...tokenType, [c.id]: e.target.value as TokenType })}>
                   {TOKEN_TYPES.map((x) => <option key={x} value={x}>{t(`token.${x}`)}</option>)}
                 </select>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { const r = run(grantToken(me.id, c.id, tokenType[c.id] ?? 'priority')); setErr(r); if (!r) showToast(<><b>{t(`token.${tokenType[c.id] ?? 'priority'}`)}</b> {t('bs.granted', { name: c.mcName })}</>); }}>{t('bs.grant')}</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={async () => { const r = await run({ type: 'grantToken', clientId: c.id, tokenType: tokenType[c.id] ?? 'priority' }); setErr(r); if (!r) showToast(<><b>{t(`token.${tokenType[c.id] ?? 'priority'}`)}</b> {t('bs.granted', { name: c.mcName })}</>); }}>{t('bs.grant')}</button>
               </div>
               {bl && !bl.clearedAt ? (
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setErr(run(clearBlacklist(s.id, me.id, c.id)))}>{t('bs.clearBlacklist', { n: s.blacklistPenaltyDays })}</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={async () => setErr(await run({ type: 'clearBlacklist', clientId: c.id }))}>{t('bs.clearBlacklist', { n: s.blacklistPenaltyDays })}</button>
               ) : !bl && (
                 <div className="inline-form">
                   <label className="sr" htmlFor={`bl-${c.id}`}>{t('bs.reason')}</label>
                   <input className="field" id={`bl-${c.id}`} placeholder={t('bs.reasonPh')} value={reason[c.id] ?? ''} onChange={(e) => setReason({ ...reason, [c.id]: e.target.value })} />
-                  <ConfirmButton id={`blk-${c.id}`} className="btn btn-ghost btn-sm danger" label={t('bs.blacklist')} confirmBody={t('bs.blacklistBody', { name: c.mcName })} confirmLabel={t('bs.blacklist')} onConfirm={() => setErr(run(blacklistClient(s.id, me.id, c.id, reason[c.id] ?? '')))} />
+                  <ConfirmButton id={`blk-${c.id}`} className="btn btn-ghost btn-sm danger" label={t('bs.blacklist')} confirmBody={t('bs.blacklistBody', { name: c.mcName })} confirmLabel={t('bs.blacklist')} onConfirm={async () => setErr(await run({ type: 'blacklistClient', clientId: c.id, reason: reason[c.id] ?? '' }))} />
                 </div>
               )}
             </li>
@@ -182,12 +183,12 @@ export function SettingsPage() {
   return (
     <div className="wrap back stack">
       <PageHead title={t('bs.settings')} aside={<SubNav />} />
-      <form className="card form-card" onSubmit={(e) => {
+      <form className="card form-card" onSubmit={async (e) => {
         e.preventDefault();
-        const r = run(updateSeller(s.id, me.id, {
+        const r = await run({ type: 'updateSeller', patch: {
           displayName: form.displayName.trim() || s.displayName, tagline: { de: form.de, en: form.en },
           weeklyCapacity: Math.max(1, form.weeklyCapacity), maxConcurrent: Math.max(1, form.maxConcurrent), blacklistPenaltyDays: Math.max(0, form.blacklistPenaltyDays),
-        }));
+        } });
         setErr(r); if (!r) showToast(t('common.saved'));
       }}>
         <h2 className="t-title">{t('set.profile')}</h2>
@@ -207,7 +208,7 @@ export function SettingsPage() {
         <h2 className="t-title" id="h-cat">{t('set.catalog')}</h2>
         <p className="t-small ink2">{t('set.catalogHint')}</p>
         {services.map((svc) => (
-          <button key={svc.id} id={`svc-${svc.id}`} className="switch" type="button" role="switch" aria-checked={svc.active} onClick={() => run(toggleService(svc.id, me.id))}>
+          <button key={svc.id} id={`svc-${svc.id}`} className="switch" type="button" role="switch" aria-checked={svc.active} onClick={() => { void run({ type: 'toggleService', serviceId: svc.id }); }}>
             <span>{svc.name[lang]} <span className="t-small mute">· {t(`kind.${svc.kind}`)}</span></span>
             <span className="switch-ui"><span className="switch-state">{svc.active ? t('common.on') : t('common.off')}</span><span className="switch-track" aria-hidden="true" /></span>
           </button>
@@ -263,10 +264,10 @@ export function BetaPage() {
         <h2 className="t-title">{t('beta.clock')}</h2>
         <p className="t-small ink2">{t('beta.clockHint', { date: fmtDate(new Date(Date.now() + db.clockOffsetDays * DAY).toISOString(), lang), n: db.clockOffsetDays })}</p>
         <div className="row-gap">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => run(advanceClock(1))}>+1 {t('bs.days')}</button>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => run(advanceClock(3))}>+3 {t('bs.days')}</button>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => run(advanceClock(31))}>+31 {t('bs.days')}</button>
-          {db.clockOffsetDays !== 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => run(advanceClock(-db.clockOffsetDays))}>{t('beta.clockReset')}</button>}
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void run({ type: 'advanceClock', days: 1 }); }}>+1 {t('bs.days')}</button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void run({ type: 'advanceClock', days: 3 }); }}>+3 {t('bs.days')}</button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void run({ type: 'advanceClock', days: 31 }); }}>+31 {t('bs.days')}</button>
+          {db.clockOffsetDays !== 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void run({ type: 'advanceClock', days: -db.clockOffsetDays }); }}>{t('beta.clockReset')}</button>}
         </div>
       </div>
       <div className="card form-card">

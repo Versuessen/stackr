@@ -7,11 +7,13 @@ import { HomePage } from './pages/Home';
 import { ItemsPage } from './pages/Items';
 import { FarmPage } from './pages/Farms';
 import { MyOrdersPage, OrderPage } from './pages/Orders';
-import { NoticesPage, SignInPage, TermsPage } from './pages/Account';
+import { MyDataPage, NoticesPage, PrivacyPage, SignInPage, TermsPage } from './pages/Account';
+import { useStore } from './data/store';
 import { BackstagePage, BetaPage, ClientsPage, SettingsPage } from './pages/Backstage';
 
 function Pages() {
   const { route } = useRouter();
+  const { mode } = useStore();
   switch (route.page) {
     case 'items': return <ItemsPage />;
     case 'farm': return <FarmPage key={route.id} id={route.id} />;
@@ -23,7 +25,9 @@ function Pages() {
     case 'backstage': return <BackstagePage />;
     case 'clients': return <ClientsPage />;
     case 'settings': return <SettingsPage />;
-    case 'beta': return <BetaPage />;
+    case 'beta': return mode === 'beta' ? <BetaPage /> : <HomePage />;
+    case 'privacy': return <PrivacyPage />;
+    case 'account': return <MyDataPage />;
     default: return <HomePage />;
   }
 }

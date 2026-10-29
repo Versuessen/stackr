@@ -4,3 +4,7 @@ dist-artifact
 artifact
 .vercel
 .DS_Store
+.env
+.env.*
+!.env.example
+*.sql.gz.enc

@@ -1,0 +1,43 @@
+# Nightly off-site backup: pg_dump of the production database, encrypted with AES-256
+# (key = BACKUP_PASSPHRASE) before it leaves the runner, kept as a workflow artifact for 30 days.
+# Needs two repository secrets: DATABASE_URL (a read-only role is enough, see deploy/db/roles.sql)
+# and BACKUP_PASSPHRASE. Restore: see deploy/db/restore.sh.
+name: Backup
+on:
+  schedule: [{ cron: '41 2 * * *' }]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL || secrets.DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Check secrets
+        id: cfg
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "Backup secrets not set yet; skipping."; echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Dump and encrypt
+        if: steps.cfg.outputs.skip != '1'
+        run: |
+          set -euo pipefail
+          umask 077
+          f="stackr-$(date -u +%Y%m%dT%H%MZ).sql.gz.enc"
+          docker run --rm -e DATABASE_URL postgres:17-alpine \
+            sh -c 'pg_dump --no-owner --no-privileges "$DATABASE_URL"' \
+            | gzip -9 \
+            | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:BACKUP_PASSPHRASE -out "$f"
+          test "$(stat -c %s "$f")" -gt 200
+          echo "FILE=$f" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        if: steps.cfg.outputs.skip != '1'
+        with:
+          name: ${{ env.FILE }}
+          path: ${{ env.FILE }}
+          retention-days: 30
+          if-no-files-found: error

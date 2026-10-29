@@ -1,6 +1,6 @@
-// Storage boundary. Beta keeps everything in this browser (localStorage).
-// To go multi-user, write a RemoteRepository with the same two methods that talks to an API
-// (e.g. Vercel functions + Postgres) and swap it in src/data/store.tsx. Nothing else changes.
+// Browser storage. In beta the whole shop lives here (localStorage). In live mode the shop
+// lives on the server (src/data/api.ts) and only harmless preferences stay here: language,
+// theme and the cart (item ids and amounts). The session is an HttpOnly cookie, never stored here.
 
 import type { DB } from '../domain/types';
 import { SCHEMA_VERSION, exampleDB } from '../domain/catalog';
@@ -38,6 +38,12 @@ export class LocalRepository implements Repository {
   save(db: DB) {
     safeSet(KEY, JSON.stringify(db));
   }
+}
+
+/** Live mode: remove the beta copy of the shop and the beta session so they cannot be confused with real data. */
+export function clearBetaData() {
+  safeSet(KEY, null);
+  safeSet(SESSION_KEY, null);
 }
 
 export const session = {

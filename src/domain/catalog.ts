@@ -1,8 +1,8 @@
 // Starting catalog and example data. Seller and catalog live in the DB so a second seller
 // can be added later without code changes; this file only seeds a fresh install.
 
-import type { Account, DB, Localized, Order, SellerProfile, Service, ServiceExtra } from './types';
-import { DAY, iso } from './rules';
+import type { Account, DB, Localized, Order, SellerProfile, Service, ServiceExtra } from './types.js';
+import { DAY, iso } from './rules.js';
 
 export const SCHEMA_VERSION = 2;
 

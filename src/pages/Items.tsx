@@ -6,7 +6,6 @@ import { Glyph, ICONS, PixelArt, iconFor } from '../ui/Pixel';
 import { ErrorLine, Field, PageHead, Stepper, TokenPill, fmtDate, fmtN } from '../ui/components';
 import { CATS, SETS, cartTotals, defaultUnit, multOf, searchItems, slotsOf, suggestItem, unitOk, type IndexedItem } from '../domain/items';
 import { bulkLimit, checkCanOrder, unusedTokens } from '../domain/rules';
-import { placeOrder } from '../data/actions';
 import type { Coords, ItemUnit, OrderLine, Token, TokenType } from '../domain/types';
 
 const PAGE = 20;
@@ -101,7 +100,7 @@ function CartLine({ entry, index }: { entry: CartEntry; index: number }) {
 }
 
 function Checkout({ lines, customs }: { lines: OrderLine[]; customs: CartEntry[] }) {
-  const { t, db, me, now, lang, run, setCart, showToast } = useStore();
+  const { t, db, me, now, lang, runForId, setCart, showToast } = useStore();
   const { go } = useRouter();
   const seller = db.sellers[0];
   const svc = db.services.find((s) => s.kind === 'material' && s.active);
@@ -114,6 +113,7 @@ function Checkout({ lines, customs }: { lines: OrderLine[]; customs: CartEntry[]
   const [vacAck, setVacAck] = useState(false);
   const [tried, setTried] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const myTokens = useMemo(() => (me ? unusedTokens(db, me.id) : []), [db, me]);
   const totals = cartTotals(lines);
   if (!seller || !svc) return null;
@@ -138,19 +138,21 @@ function Checkout({ lines, customs }: { lines: OrderLine[]; customs: CartEntry[]
     const same = myTokens.filter((x) => ids.includes(x.id) && x.type === tok.type).map((x) => x.id);
     return [...ids.filter((i) => !same.includes(i)), tok.id];
   });
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTried(true);
     if (!coordsOk || !tos || (seller.vacation.on && !vacAck)) return;
-    let id = '';
+    if (busy) return;
     const title = lines.length === 1 && !customs.length ? (lang === 'de' ? lines[0].de : lines[0].en) : t('order.nLines', { n: lines.length + customs.length });
-    const r = run(placeOrder({
-      clientId: me.id, serviceId: svc.id, title, details: note, lines,
+    setBusy(true);
+    const { error: r, id } = await runForId({ type: 'placeOrder', input: {
+      serviceId: svc.id, title, details: note, lines,
       customLines: customs.map((x) => ({ text: (x as { text: string }).text })),
       batches, extras: [], coords: { ...c, dimension: coords.dimension }, deliveryMethod: 'place_at_coords',
       clientProvidesMaterials: false, offer, tokenIds, tosAccepted: tos, vacationAcknowledged: vacAck,
-    }, (x) => { id = x; }));
-    if (r) { setErr(r); return; }
+    } });
+    setBusy(false);
+    if (r || !id) { setErr(r); return; }
     setCart([]);
     showToast(t('order.placed'));
     go({ page: 'order', id });
@@ -202,7 +204,7 @@ function Checkout({ lines, customs }: { lines: OrderLine[]; customs: CartEntry[]
         <span>{t('checkout.tos')} <Link to={{ page: 'terms' }}>{t('nav.terms')}</Link>.</span></label>
       {tried && !tos && <p className="err" id="e-tos" style={{ marginTop: -6 }}><Glyph name="info" size={12} /> {t('err.tos')}</p>}
       <ErrorLine msg={err} />
-      <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={!check.ok || overLimit}>{t('checkout.submit')} <Glyph name="arrow" size={14} /></button>
+      <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={!check.ok || overLimit || busy} aria-busy={busy}>{t('checkout.submit')} <Glyph name="arrow" size={14} /></button>
       <p className="t-small mute" style={{ margin: 0 }}>{t('order.submitNote')}</p>
     </form>
   );

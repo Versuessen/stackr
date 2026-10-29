@@ -5,7 +5,6 @@ import { Glyph, ICONS, PORTRAIT, PixelArt, SceneArt, sceneBg, scenes } from '../
 import { ErrorLine, Field, Stars, TokenPill, fmtDate } from '../ui/components';
 import { FARM_ICON, farmKey } from './Home';
 import { checkCanOrder, clientStats, sellerStats, unusedTokens } from '../domain/rules';
-import { placeOrder } from '../data/actions';
 import type { Coords, FarmTier, Service, Token, TokenType } from '../domain/types';
 
 const TIER_INFO: Record<FarmTier, { days: number; badge: string; incl: string[] }> = {
@@ -26,7 +25,7 @@ const CMP: [string, string[]][] = [
 function RequestForm({ svc, tier, extras, own, token, onTokenChange }: {
   svc: Service; tier?: FarmTier; extras: string[]; own: boolean; token: boolean; onTokenChange?: (on: boolean) => void;
 }) {
-  const { t, db, me, now, lang, run, showToast } = useStore();
+  const { t, db, me, now, lang, runForId, showToast } = useStore();
   const { go } = useRouter();
   const seller = db.sellers.find((s) => s.id === svc.sellerId)!;
   const isFarm = svc.kind === 'farm';
@@ -39,6 +38,7 @@ function RequestForm({ svc, tier, extras, own, token, onTokenChange }: {
   const [vacAck, setVacAck] = useState(false);
   const [tried, setTried] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const myTokens = useMemo(() => (me ? unusedTokens(db, me.id) : []), [db, me]);
   if (!me) {
     return (
@@ -58,17 +58,19 @@ function RequestForm({ svc, tier, extras, own, token, onTokenChange }: {
   const coordsOk = [c.x, c.y, c.z].every(Number.isFinite);
   const needCoords = isFarm;
   const titleOk = isFarm || title.trim().length > 0;
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setTried(true);
     if ((needCoords && !coordsOk) || !tos || !titleOk || (seller.vacation.on && !vacAck)) return;
-    let id = '';
-    const r = run(placeOrder({
-      clientId: me.id, serviceId: svc.id, title: isFarm ? svc.name[lang] : title, details, batches: 1,
+    if (busy) return;
+    setBusy(true);
+    const { error: r, id } = await runForId({ type: 'placeOrder', input: {
+      serviceId: svc.id, title: isFarm ? svc.name[lang] : title, details, batches: 1,
       farmTier: isFarm ? tier : undefined, extras, coords: coordsOk ? { ...c, dimension: coords.dimension } : undefined,
       deliveryMethod: isFarm ? 'build_at_coords' : 'hand_over', clientProvidesMaterials: own, offer, tokenIds: ids,
       tosAccepted: tos, vacationAcknowledged: vacAck,
-    }, (x) => { id = x; }));
-    if (r) { setErr(r); return; }
+    } });
+    setBusy(false);
+    if (r || !id) { setErr(r); return; }
     showToast(t('order.placed'));
     go({ page: 'order', id });
   };
@@ -116,7 +118,7 @@ function RequestForm({ svc, tier, extras, own, token, onTokenChange }: {
         <span>{t('checkout.tos')} <Link to={{ page: 'terms' }}>{t('nav.terms')}</Link>.</span></label>
       {tried && !tos && <p className="err" style={{ marginTop: -6 }}><Glyph name="info" size={12} /> {t('err.tos')}</p>}
       <ErrorLine msg={err} />
-      <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={!check.ok}>{t('farm.send')} <Glyph name="arrow" size={14} /></button>
+      <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={!check.ok || busy} aria-busy={busy}>{t('farm.send')} <Glyph name="arrow" size={14} /></button>
       {onTokenChange && null}
     </form>
   );

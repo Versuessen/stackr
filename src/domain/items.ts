@@ -1,7 +1,7 @@
 // Item list for Minecraft Java 26.3 (public/items-26.3.json, built by scripts/build-items.mjs)
 // plus the search and the unit maths the shop runs on. Pure functions, no React.
 
-import type { ItemUnit, OrderLine } from './types';
+import type { ItemUnit, OrderLine } from './types.js';
 
 export type ItemCat = 'blocks' | 'materials' | 'tools' | 'armor' | 'food' | 'redstone' | 'brewing';
 export interface Item { id: string; en: string; de: string; stack: number; cat: ItemCat; rare?: string }

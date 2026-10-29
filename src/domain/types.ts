@@ -13,6 +13,7 @@ export interface Account {
   createdAt: ISODate;
   lastSeenAt: ISODate;
   sellerId?: ID; // set when this account runs a seller profile
+  deletedAt?: ISODate; // set when the person erased their account
 }
 
 export interface SellerProfile {
@@ -174,6 +175,7 @@ export interface Order {
   rating?: Rating;
   complaints: Complaint[];
   cancelledBy?: 'client' | 'seller';
+  scrubbed?: boolean; // free text removed (erasure or retention period)
 }
 
 export interface BlacklistEntry {

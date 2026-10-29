@@ -2,12 +2,12 @@
 // returns a new DB, and throws ActionError (with an i18n key) when a rule forbids the change.
 // A future server would run these same functions, so the rules stay in one place.
 
-import type { CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types';
-import { cartTotals, unitOk } from '../domain/items';
+import type { CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types.js';
+import { cartTotals, unitOk } from '../domain/items.js';
 import {
   CONFIG, DAY, activeBlacklist, bulkLimit, checkCanOrder, clientStats, iso, nextLevelState, nowFrom, sellerStats,
-} from '../domain/rules';
-import { emptyDB, exampleDB } from '../domain/catalog';
+} from '../domain/rules.js';
+import { emptyDB, exampleDB } from '../domain/catalog.js';
 
 export class ActionError extends Error {
   constructor(public key: string, public vars?: Record<string, string | number>) { super(key); }
@@ -20,7 +20,12 @@ export function apply(db: DB, fn: Mut): DB {
   return draft;
 }
 
-const uid = (p: string) => `${p}-${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-3)}`;
+// Random ids from the platform CSPRNG (browser and Node both have crypto.getRandomValues).
+const uid = (p: string) => {
+  const b = new Uint8Array(9);
+  globalThis.crypto.getRandomValues(b);
+  return `${p}-${Array.from(b, (x) => x.toString(36).padStart(2, '0')).join('').slice(0, 14)}`;
+};
 
 function order(db: DB, id: ID): Order {
   const o = db.orders.find((x) => x.id === id);
@@ -84,6 +89,80 @@ export const signIn = (mcName: string, onId: (id: ID) => void): Mut => (db, now)
   acc.lastSeenAt = iso(now);
   if (acc.sellerId) seller(db, acc.sellerId).lastOnlineAt = iso(now);
   onId(acc.id);
+};
+
+/**
+ * Live sign-in after the verification server confirmed the Minecraft account.
+ * Accounts are keyed by UUID, because names can change. The seller account is the one whose
+ * UUID matches the server's SELLER_MC_UUID setting.
+ */
+export const signInVerified = (mcName: string, mcUuid: string, isSeller: boolean, onId: (id: ID) => void): Mut => (db, now) => {
+  if (!/^[A-Za-z0-9_]{3,16}$/.test(mcName) || !/^[0-9a-f]{32}$/.test(mcUuid)) throw new ActionError('err.badName');
+  let acc = db.accounts.find((a) => a.mcUuid === mcUuid && !a.deletedAt);
+  if (!acc && isSeller) acc = db.accounts.find((a) => a.sellerId);
+  if (!acc) {
+    acc = { id: uid('acc'), mcName, mcUuid, createdAt: iso(now), lastSeenAt: iso(now) };
+    db.accounts.push(acc);
+    db.tokens.push({ id: uid('tok'), ownerId: acc.id, type: 'priority', source: 'first_order', grantedAt: iso(now) });
+    notify(db, now, acc.id, 'notice.welcomeToken');
+  }
+  if (acc.sellerId && !isSeller) throw new ActionError('err.notAllowed');
+  acc.mcName = mcName;
+  acc.mcUuid = mcUuid;
+  acc.lastSeenAt = iso(now);
+  if (acc.sellerId) {
+    const s = seller(db, acc.sellerId);
+    s.lastOnlineAt = iso(now);
+    if (s.displayName === 'DeinName') s.displayName = mcName;
+  }
+  onId(acc.id);
+};
+
+const OPEN_FOR_DELETE: OrderStatus[] = ['received', 'cleared', 'processing', 'fulfilling', 'delivered'];
+
+/**
+ * GDPR erasure. Removes everything that identifies the person; the order records stay as
+ * anonymous bookkeeping (status, dates, rating) so seller statistics remain correct.
+ */
+export const deleteAccount = (accountId: ID): Mut => (db, now) => {
+  const acc = db.accounts.find((a) => a.id === accountId);
+  if (!acc || acc.deletedAt) throw new ActionError('err.accountMissing');
+  if (acc.sellerId) throw new ActionError('err.notAllowed');
+  if (db.orders.some((o) => o.clientId === accountId && OPEN_FOR_DELETE.includes(o.status))) throw new ActionError('err.openOrders');
+  acc.mcName = 'deleted';
+  acc.mcUuid = '';
+  acc.deletedAt = iso(now);
+  for (const o of db.orders.filter((x) => x.clientId === accountId)) scrubOrder(o);
+  db.notices = db.notices.filter((n) => n.accountId !== accountId);
+  db.tokens = db.tokens.filter((t) => t.ownerId !== accountId || t.usedOnOrderId);
+  for (const b of db.blacklist) if (b.clientId === accountId) b.reason = '—';
+};
+
+function scrubOrder(o: Order) {
+  o.title = '—';
+  o.details = '';
+  o.offer = '';
+  o.coords = undefined;
+  o.messages = [];
+  o.customLines = o.customLines?.map(() => ({ text: '—' }));
+  o.complaints = o.complaints.map((c) => ({ ...c, text: '—' }));
+  if (o.terms) o.terms = { ...o.terms, price: '—', note: undefined };
+  for (const h of o.history) h.note = undefined;
+  o.scrubbed = true;
+}
+
+/** Retention: free text, coordinates and chat of closed orders go after RETENTION_DAYS. Old notices too. */
+export const RETENTION_DAYS = 365;
+export const NOTICE_DAYS = 180;
+export const purgeOld: Mut = (db, now) => {
+  const cut = now - RETENTION_DAYS * DAY;
+  for (const o of db.orders) {
+    if (o.scrubbed || OPEN_FOR_DELETE.includes(o.status)) continue;
+    const last = o.history.length ? Date.parse(o.history[o.history.length - 1].at) : Date.parse(o.createdAt);
+    if (last < cut) scrubOrder(o);
+  }
+  const noticeCut = now - NOTICE_DAYS * DAY;
+  db.notices = db.notices.filter((n) => Date.parse(n.at) >= noticeCut);
 };
 
 // ---------- Placing an order ----------
@@ -342,6 +421,7 @@ export const toggleService = (serviceId: ID, actorId: ID): Mut => (db) => {
 export const blacklistClient = (sellerId: ID, actorId: ID, clientId: ID, reason: string): Mut => (db, now) => {
   const s = seller(db, sellerId);
   if (s.accountId !== actorId) throw new ActionError('err.notAllowed');
+  if (!db.accounts.some((a) => a.id === clientId)) throw new ActionError('err.accountMissing');
   if (activeBlacklist(db, sellerId, clientId, now)) return;
   db.blacklist.push({ sellerId, clientId, reason: reason.trim() || '—', since: iso(now) });
   notify(db, now, clientId, 'notice.blacklisted', undefined, { seller: s.displayName });
@@ -359,6 +439,7 @@ export const clearBlacklist = (sellerId: ID, actorId: ID, clientId: ID): Mut => 
 
 export const grantToken = (actorId: ID, clientId: ID, type: TokenType): Mut => (db, now) => {
   if (!db.accounts.find((a) => a.id === actorId)?.sellerId) throw new ActionError('err.notAllowed');
+  if (!db.accounts.some((a) => a.id === clientId && !a.deletedAt)) throw new ActionError('err.accountMissing');
   db.tokens.push({ id: uid('tok'), ownerId: clientId, type, source: 'granted', grantedAt: iso(now) });
   notify(db, now, clientId, 'notice.tokenGranted', undefined, { type });
 };

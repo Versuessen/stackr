@@ -100,7 +100,7 @@ function ThemeButton() {
 }
 
 function AccountMenu() {
-  const { t, me, mySeller, setSession } = useStore();
+  const { t, me, mySeller, signOut, mode } = useStore();
   const { go } = useRouter();
   const ref = useRef<HTMLDetailsElement>(null);
   const close = () => ref.current?.removeAttribute('open');
@@ -117,15 +117,16 @@ function AccountMenu() {
         <Link role="menuitem" to={{ page: 'orders' }} onClick={close}>{t('nav.myOrders')}</Link>
         <Link role="menuitem" to={{ page: 'notices' }} onClick={close}>{t('nav.notices')}</Link>
         {mySeller && <Link role="menuitem" to={{ page: 'backstage' }} onClick={close}>{t('nav.backstage')}</Link>}
-        <Link role="menuitem" to={{ page: 'beta' }} onClick={close}>{t('nav.betaTools')}</Link>
-        <button role="menuitem" type="button" onClick={() => { close(); setSession(null); go({ page: 'home' }); }}>{t('nav.signOut')}</button>
+        <Link role="menuitem" to={{ page: 'account' }} onClick={close}>{t('nav.myData')}</Link>
+        {mode === 'beta' && <Link role="menuitem" to={{ page: 'beta' }} onClick={close}>{t('nav.betaTools')}</Link>}
+        <button role="menuitem" type="button" onClick={async () => { close(); await signOut(); go({ page: 'home' }); }}>{t('nav.signOut')}</button>
       </div>
     </details>
   );
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { t, lang, setLang, me, mySeller, db, toasts, closeToast, cart, cartBump } = useStore();
+  const { t, lang, setLang, me, mySeller, db, toasts, closeToast, cart, cartBump, mode } = useStore();
   const { route } = useRouter();
   const status = useShopStatus();
   const unread = me ? db.notices.filter((n) => n.accountId === me.id && !n.read).length : 0;
@@ -144,7 +145,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <span className="wip-ic" aria-hidden="true"><Glyph name="info" size={20} color="#16141b" /></span>
             <div>
               <p className="wip-title">{t('wip.title')}</p>
-              <p className="wip-body">{t('wip.body')}</p>
+              <p className="wip-body">{t(mode === 'live' ? 'wip.bodyLive' : 'wip.body')}</p>
             </div>
           </div>
         </div>
@@ -184,7 +185,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
       </div>
-      <main id="main" tabIndex={-1}>{children}</main>
+      <main id="main" tabIndex={-1} aria-busy={mode === 'loading'}>{mode === 'loading' ? <div className="wrap boot" role="status"><span className="t-small mute">{t('common.loading')}</span></div> : children}</main>
       <footer className="foot dark">
         <div className="wrap foot-grid">
           <div className="foot-col" style={{ gap: 14 }}>
@@ -192,10 +193,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <p className="t-body" style={{ color: '#d6d4dc', maxWidth: '36ch' }}>{t('foot.about')}</p>
           </div>
           <div className="foot-col"><h3>{t('foot.shop')}</h3><Link to={{ page: 'items' }}>{t('nav.items')}</Link><Link to={{ page: 'farm', id: 'iron' }}>{t('nav.farms')}</Link><Link to={{ page: 'farm', id: 'custom' }}>{t('nav.custom')}</Link></div>
-          <div className="foot-col"><h3>{t('foot.account')}</h3>{me ? <Link to={{ page: 'orders' }}>{t('nav.myOrders')}</Link> : <Link to={{ page: 'signin' }}>{t('nav.signIn')}</Link>}<Link to={{ page: 'items' }} anchor="cart">{t('nav.cart')}</Link><Link to={{ page: 'beta' }}>{t('nav.betaTools')}</Link></div>
-          <div className="foot-col"><h3>Stackr</h3><Link to={{ page: 'home' }} anchor="ablauf">{t('nav.how')}</Link><Link to={{ page: 'terms' }}>{t('nav.terms')}</Link></div>
+          <div className="foot-col"><h3>{t('foot.account')}</h3>{me ? <Link to={{ page: 'orders' }}>{t('nav.myOrders')}</Link> : <Link to={{ page: 'signin' }}>{t('nav.signIn')}</Link>}<Link to={{ page: 'items' }} anchor="cart">{t('nav.cart')}</Link>{mode === 'beta' && <Link to={{ page: 'beta' }}>{t('nav.betaTools')}</Link>}</div>
+          <div className="foot-col"><h3>Stackr</h3><Link to={{ page: 'home' }} anchor="ablauf">{t('nav.how')}</Link><Link to={{ page: 'terms' }}>{t('nav.terms')}</Link><Link to={{ page: 'privacy' }}>{t('nav.privacy')}</Link></div>
         </div>
-        <div className="wrap foot-base"><span>{t('foot.beta')}</span><span>{t('foot.note')}</span></div>
+        <div className="wrap foot-base"><span>{t(mode === 'live' ? 'foot.live' : 'foot.beta')}</span><span>{t('foot.note')}</span></div>
         {route.page === 'home' && <div className="giant" aria-hidden="true">STACKR</div>}
       </footer>
       <div className="toasts" role="status" aria-live="polite">

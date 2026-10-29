@@ -5,10 +5,7 @@ import {
   AccountName, ConfirmButton, Coords, Empty, ErrorLine, Field, PageHead, StarInput, Stars, StatusChip, TokenPill, Tracker, fmtDate, fmtN, relDays,
 } from '../ui/components';
 import { Glyph, ICONS, PixelArt, iconFor } from '../ui/Pixel';
-import {
-  acceptTerms, approve, cancelByClient, cancelBySeller, clearOrder, complain, declineOrder, deliverBatch, proposeTerms, rate,
-  sendMessage, startFulfilling, startProcessing,
-} from '../data/actions';
+import type { Command } from '../data/commands';
 import { CONFIG, DAY, estimateWaitDays, isOpen, queuePosition, sellerQueue, tokensOf } from '../domain/rules';
 import { cartTotals, piecesOf, slotsOf } from '../domain/items';
 import type { Order, RatingTags } from '../domain/types';
@@ -77,7 +74,7 @@ export function MyOrdersPage() {
 // ---------- Single order ----------
 
 function TermsBlock({ o, role }: { o: Order; role: 'client' | 'seller' }) {
-  const { t, run, me, lang } = useStore();
+  const { t, run, lang } = useStore();
   const [price, setPrice] = useState(o.terms?.price ?? o.offer);
   const [days, setDays] = useState(o.terms?.days ?? 3);
   const [note, setNote] = useState(o.terms?.note ?? '');
@@ -99,7 +96,7 @@ function TermsBlock({ o, role }: { o: Order; role: 'client' | 'seller' }) {
       </dl>
       {role === 'client' && negotiable && !o.terms && <p className="t-small ink2">{t('terms.waitingSeller')}</p>}
       {role === 'seller' && negotiable && (editing ? (
-        <form className="stack-sm" onSubmit={(e) => { e.preventDefault(); const r = run(proposeTerms(o.id, me!.id, price, days, note)); setErr(r); if (!r) setEditing(false); }}>
+        <form className="stack-sm" onSubmit={async (e) => { e.preventDefault(); const r = await run({ type: 'proposeTerms', orderId: o.id, price, days, note }); setErr(r); if (!r) setEditing(false); }}>
           <Field label={t('terms.price')} htmlFor="t-price"><input className="field" id="t-price" value={price} onChange={(e) => setPrice(e.target.value)} maxLength={200} /></Field>
           <Field label={t('terms.days')} htmlFor="t-days"><input className="field num" id="t-days" type="number" min={1} max={60} value={days} onChange={(e) => setDays(Number(e.target.value))} /></Field>
           <Field label={t('terms.note')} htmlFor="t-note"><input className="field" id="t-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} /></Field>
@@ -131,7 +128,7 @@ function Messages({ o }: { o: Order }) {
         ))}
       </ol>
       {!closed && (
-        <form className="send" onSubmit={(e) => { e.preventDefault(); const r = run(sendMessage(o.id, me!.id, text)); setErr(r); if (!r) setText(''); }}>
+        <form className="send" onSubmit={async (e) => { e.preventDefault(); const r = await run({ type: 'sendMessage', orderId: o.id, text }); setErr(r); if (!r) setText(''); }}>
           <label htmlFor="msg-input" className="sr">{t('msg.label')}</label>
           <input className="field" id="msg-input" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('msg.placeholder')} maxLength={1000} autoComplete="off" />
           <button type="submit" className="btn btn-primary" disabled={!text.trim()}>{t('msg.send')}</button>
@@ -143,15 +140,15 @@ function Messages({ o }: { o: Order }) {
 }
 
 function RatingForm({ o }: { o: Order }) {
-  const { t, run, me, showToast } = useStore();
+  const { t, run, showToast } = useStore();
   const [stars, setStars] = useState(0);
   const [tags, setTags] = useState<Partial<RatingTags>>({});
   const [err, setErr] = useState<string | null>(null);
   return (
-    <form className="stack-sm" onSubmit={(e) => {
+    <form className="stack-sm" onSubmit={async (e) => {
       e.preventDefault();
       const clean = Object.fromEntries(Object.entries(tags).filter(([, v]) => v)) as Partial<RatingTags>;
-      const r = run(rate(o.id, me!.id, { stars, tags: clean })); setErr(r); if (!r) showToast(t('rating.thanks'));
+      const r = await run({ type: 'rate', orderId: o.id, stars, tags: clean }); setErr(r); if (!r) showToast(t('rating.thanks'));
     }}>
       <div className="rate"><StarInput id="r-overall" value={stars} onChange={setStars} label={t('rating.overall')} /><span className="t-small ink2">{t(`rating.word.${stars}`)}</span></div>
       <details className="faq"><summary>{t('rating.tagsOptional')}</summary>
@@ -167,14 +164,14 @@ function RatingForm({ o }: { o: Order }) {
 
 /** The one card that always says what happens next and who acts. */
 function NextAction({ o, role }: { o: Order; role: 'client' | 'seller' }) {
-  const { t, run, me, db, lang, now, showToast } = useStore();
+  const { t, run, db, lang, now, showToast } = useStore();
   const [note, setNote] = useState('');
   const [complaint, setComplaint] = useState('');
   const [showComplaint, setShowComplaint] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const seller = db.sellers.find((s) => s.id === o.sellerId)!;
   const client = db.accounts.find((a) => a.id === o.clientId);
-  const go = (fn: Parameters<typeof run>[0], toast?: string) => { const r = run(fn); setErr(r); if (!r && toast) showToast(toast); };
+  const go = async (cmd: Command, toast?: string) => { const r = await run(cmd); setErr(r); if (!r && toast) showToast(toast); return r; };
   const deadline = o.deliveredAt ? new Date(Date.parse(o.deliveredAt) + CONFIG.approvalWindowDays * DAY).toISOString() : '';
   const inWork = db.orders.filter((x) => x.sellerId === seller.id && (x.status === 'processing' || x.status === 'fulfilling')).length;
   let title = '', body = '';
@@ -186,7 +183,7 @@ function NextAction({ o, role }: { o: Order; role: 'client' | 'seller' }) {
       case 'received':
         if (o.terms && !o.terms.acceptedAt) {
           title = t('next.c.accept'); body = t('next.c.acceptBody', { seller: seller.displayName, price: o.terms.price, n: o.terms.days });
-          actions = <button type="button" id="accept-terms" className="btn btn-primary" onClick={() => go(acceptTerms(o.id, me!.id), t('next.c.accepted'))}>{t('terms.accept')}</button>;
+          actions = <button type="button" id="accept-terms" className="btn btn-primary" onClick={() => go({ type: 'acceptTerms', orderId: o.id }, t('next.c.accepted'))}>{t('terms.accept')}</button>;
         } else if (o.terms?.acceptedAt) { title = t('next.c.waitClear'); body = t('next.c.waitClearBody', { seller: seller.displayName }); }
         else { title = t('next.c.waitTerms'); body = t('next.c.waitTermsBody', { seller: seller.displayName }); }
         break;
@@ -196,7 +193,7 @@ function NextAction({ o, role }: { o: Order; role: 'client' | 'seller' }) {
       case 'delivered':
         title = t('client.checkTitle'); body = t('client.checkBody', { date: fmtDate(deadline, lang), rel: relDays(deadline, now, t) });
         actions = <>
-          <button type="button" id="approve" className="btn btn-primary" onClick={() => go(approve(o.id, me!.id), t('client.approved'))}>{t('client.approve')}</button>
+          <button type="button" id="approve" className="btn btn-primary" onClick={() => go({ type: 'approve', orderId: o.id }, t('client.approved'))}>{t('client.approve')}</button>
           <button type="button" className="btn btn-secondary" aria-expanded={showComplaint} onClick={() => setShowComplaint((v) => !v)}>{t('client.complain')}</button>
         </>;
         break;
@@ -209,14 +206,14 @@ function NextAction({ o, role }: { o: Order; role: 'client' | 'seller' }) {
       case 'received':
         title = !o.terms ? t('next.s.propose') : !o.terms.acceptedAt ? t('next.s.waitAccept') : t('next.s.canClear');
         body = !o.terms ? t('next.s.proposeBody', { name: client?.mcName ?? '', offer: o.offer || '—' }) : !o.terms.acceptedAt ? t('sa.waitAccept') : t('sa.canClear');
-        actions = <button type="button" id="clear-order" className="btn btn-primary" disabled={!o.terms?.acceptedAt} onClick={() => go(clearOrder(o.id, me!.id))}>{t('sa.clear')}</button>;
+        actions = <button type="button" id="clear-order" className="btn btn-primary" disabled={!o.terms?.acceptedAt} onClick={() => go({ type: 'clearOrder', orderId: o.id })}>{t('sa.clear')}</button>;
         break;
       case 'cleared': title = t('next.s.start'); body = t('sa.start') + (inWork >= seller.maxConcurrent ? ` ${t('sa.atCapacity', { n: inWork, max: seller.maxConcurrent })}` : '');
-        actions = <button type="button" id="start" className="btn btn-primary" onClick={() => go(startProcessing(o.id, me!.id))}>{t('sa.startBtn')}</button>; break;
+        actions = <button type="button" id="start" className="btn btn-primary" onClick={() => go({ type: 'startProcessing', orderId: o.id })}>{t('sa.startBtn')}</button>; break;
       case 'processing': title = t('next.s.processing'); body = o.history.at(-1)?.note === 'complaint' ? t('sa.reworkComplaint') : t('sa.processing');
-        actions = <button type="button" id="fulfil" className="btn btn-primary" onClick={() => go(startFulfilling(o.id, me!.id))}>{t('sa.fulfilBtn')}</button>; break;
+        actions = <button type="button" id="fulfil" className="btn btn-primary" onClick={() => go({ type: 'startFulfilling', orderId: o.id })}>{t('sa.fulfilBtn')}</button>; break;
       case 'fulfilling': title = t('next.s.fulfilling'); body = o.batches > 1 ? t('sa.batchProgress', { done: o.batchesDelivered, total: o.batches }) : o.kind === 'farm' ? t('sa.farmTest') : t('sa.deliverAll');
-        actions = <button type="button" id="deliver" className="btn btn-primary" onClick={() => go(deliverBatch(o.id, me!.id))}>{o.batchesDelivered + 1 < o.batches ? t('sa.deliverBatch', { n: o.batchesDelivered + 1 }) : t('sa.markDone')}</button>; break;
+        actions = <button type="button" id="deliver" className="btn btn-primary" onClick={() => go({ type: 'deliverBatch', orderId: o.id })}>{o.batchesDelivered + 1 < o.batches ? t('sa.deliverBatch', { n: o.batchesDelivered + 1 }) : t('sa.markDone')}</button>; break;
       case 'delivered': title = t('next.s.waiting', { name: client?.mcName ?? '' }); body = t('sa.waitingClient', { date: fmtDate(deadline, lang), rel: relDays(deadline, now, t) }); break;
       default: title = t(`status.long.${o.status}`); body = t('sa.closed');
     }
@@ -230,7 +227,7 @@ function NextAction({ o, role }: { o: Order; role: 'client' | 'seller' }) {
       {role === 'client' && o.status === 'completed' && !o.rating && <RatingForm o={o} />}
       {role === 'client' && o.status === 'completed' && o.rating && <Stars value={o.rating.stars} />}
       {showComplaint && o.status === 'delivered' && (
-        <form className="stack-sm" onSubmit={(e) => { e.preventDefault(); go(complain(o.id, me!.id, complaint)); setShowComplaint(false); }}>
+        <form className="stack-sm" onSubmit={async (e) => { e.preventDefault(); if (!(await go({ type: 'complain', orderId: o.id, text: complaint }))) setShowComplaint(false); }}>
           <Field label={t('client.complaintLabel')} htmlFor="c-text"><textarea className="field" id="c-text" rows={3} value={complaint} onChange={(e) => setComplaint(e.target.value)} /></Field>
           <div className="row-gap"><button type="submit" className="btn btn-secondary">{t('client.complaintSend')}</button></div>
         </form>
@@ -241,13 +238,13 @@ function NextAction({ o, role }: { o: Order; role: 'client' | 'seller' }) {
       <div className="row-gap">
         {actions}
         {role === 'client' && (o.status === 'received' || o.status === 'cleared') && (
-          <ConfirmButton id="cancel-client" label={t('client.cancel')} confirmTitle={t('client.cancelSure')} confirmBody={o.status === 'received' ? t('client.cancelHintReceived') : t('client.cancelHintCleared')} confirmLabel={t('client.cancelConfirm')} onConfirm={() => go(cancelByClient(o.id, me!.id))} />
+          <ConfirmButton id="cancel-client" label={t('client.cancel')} confirmTitle={t('client.cancelSure')} confirmBody={o.status === 'received' ? t('client.cancelHintReceived') : t('client.cancelHintCleared')} confirmLabel={t('client.cancelConfirm')} onConfirm={() => go({ type: 'cancelByClient', orderId: o.id })} />
         )}
         {role === 'seller' && o.status === 'received' && (
-          <ConfirmButton id="decline" label={t('sa.decline')} confirmBody={t('sa.declineBody')} confirmLabel={t('sa.declineConfirm')} onConfirm={() => go(declineOrder(o.id, me!.id, note))} />
+          <ConfirmButton id="decline" label={t('sa.decline')} confirmBody={t('sa.declineBody')} confirmLabel={t('sa.declineConfirm')} onConfirm={() => go({ type: 'declineOrder', orderId: o.id, note })} />
         )}
         {role === 'seller' && ['cleared', 'processing', 'fulfilling'].includes(o.status) && (
-          <ConfirmButton id="cancel-seller" className="btn btn-ghost" label={t('sa.cancel')} confirmBody={t('sa.cancelBody')} confirmLabel={t('sa.cancelConfirm')} onConfirm={() => go(cancelBySeller(o.id, me!.id, note))} />
+          <ConfirmButton id="cancel-seller" className="btn btn-ghost" label={t('sa.cancel')} confirmBody={t('sa.cancelBody')} confirmLabel={t('sa.cancelConfirm')} onConfirm={() => go({ type: 'cancelBySeller', orderId: o.id, note })} />
         )}
         <a className="btn btn-ghost" href="#chat" onClick={(e) => { e.preventDefault(); document.getElementById('chat')?.scrollIntoView({ block: 'start' }); document.getElementById('msg-input')?.focus({ preventScroll: true }); }}><Glyph name="chat" size={14} /> {t('msg.title')}</a>
       </div>
