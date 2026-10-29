@@ -139,6 +139,7 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .seg button small { font-size: 11px; font-weight: 500; color: var(--mute); font-variant-numeric: tabular-nums; }
 .seg button:hover:not(:disabled) { background: var(--canvas); }
 .seg button[aria-checked='true'] { background: var(--ink); color: var(--paper); }
+.seg button[aria-checked='true']:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
 .seg button[aria-checked='true'] small { color: var(--slime); }
 .seg button:disabled { color: var(--faint); cursor: not-allowed; }
 .seg button:disabled small { color: var(--faint); }
@@ -808,3 +809,22 @@ a.notice-item:hover { border-color: var(--ink); }
 .prose p.li::before { content: ''; position: absolute; left: 2px; top: .65em; width: 7px; height: 7px; background: var(--lapis); }
 .linkish { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
 @media (max-width: 560px) { .recovery-codes { grid-template-columns: 1fr; } .prose { padding: 20px; } }
+
+/* ---------- Password accounts, invites, name confirmation ---------- */
+.auth-tabs { width: 100%; }
+.auth-tabs button { flex: 1 1 0; min-width: 0; }
+.pw-wrap { position: relative; display: flex; align-items: center; }
+.pw-wrap .field { flex: 1 1 auto; padding-right: 92px; }
+.pw-wrap .pw-toggle { position: absolute; right: 4px; min-height: 36px; }
+.acct-name { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.name-flag { font-size: 11px; }
+.name-actions { margin-top: 4px; }
+.code-box { display: flex; flex-direction: column; gap: 6px; padding: 16px; border: 2px dashed var(--ink); border-radius: 12px; background: var(--paper); }
+.code-box p { margin: 0; }
+.code-big { letter-spacing: .12em; }
+.msg-line { padding: 6px 10px; border-radius: 8px; background: var(--canvas); word-break: break-all; }
+.invites { margin-top: 24px; }
+.inv-list { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.inv-list li { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.inv-list li .mc { font-weight: 600; }
+.inv-list li .btn { margin-left: auto; }

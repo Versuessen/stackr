@@ -41,50 +41,85 @@ function afterSignIn(go: ReturnType<typeof useRouter>['go'], cartItems: number, 
   else go(cartItems ? { page: 'items' } : { page: 'home' }, cartItems ? 'cart' : undefined);
 }
 
-/** Reads ?auth_error=… once (set by the sign-in callback) and removes it from the address bar. */
-function takeAuthError(): string | null {
-  try {
-    const u = new URL(window.location.href);
-    const e = u.searchParams.get('auth_error');
-    if (!e) return null;
-    u.searchParams.delete('auth_error');
-    window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`);
-    return /^[A-Za-z]{2,20}$/.test(e) ? e : 'unavailable';
-  } catch { return null; }
+type AuthTab = 'login' | 'register' | 'reset';
+
+function PasswordField({ id, label, value, onChange, autoComplete, hint }: { id: string; label: string; value: string; onChange: (v: string) => void; autoComplete: string; hint?: string }) {
+  const { t } = useStore();
+  const [show, setShow] = useState(false);
+  return (
+    <Field label={label} htmlFor={id} hint={hint}>
+      <div className="pw-wrap">
+        <input className="field" id={id} type={show ? 'text' : 'password'} value={value} autoComplete={autoComplete} maxLength={128} onChange={(e) => onChange(e.target.value)} />
+        <button type="button" className="btn btn-ghost btn-sm pw-toggle" aria-pressed={show} onClick={() => setShow((v) => !v)}>{show ? t('auth.hide') : t('auth.show')}</button>
+      </div>
+    </Field>
+  );
 }
 
 function LiveSignIn() {
-  const { t, live, cart } = useStore();
-  const [err] = useState(takeAuthError);
+  const { t, db, refresh, showToast, cart } = useStore();
+  const { go } = useRouter();
+  const inviteOnly = db.sellers.some((x) => x.inviteOnly);
+  const [tab, setTab] = useState<AuthTab>('login');
+  const [name, setName] = useState('');
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [code, setCode] = useState('');
+  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const ready = !!live?.auth.ready;
-  const next = cart.length ? 'items' : 'home';
+
+  const switchTab = (x: AuthTab) => { setTab(x); setErr(null); setPw(''); setPw2(''); setCode(''); };
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (!/^[A-Za-z0-9_]{3,16}$/.test(n)) { setErr(t('err.badName')); return; }
+    if (tab !== 'login' && pw.length < 10) { setErr(t('err.pwShort')); return; }
+    if (tab !== 'login' && pw !== pw2) { setErr(t('err.pwMismatch')); return; }
+    if (tab === 'register' && inviteOnly && !code.trim()) { setErr(t('err.inviteRequired')); return; }
+    if (tab === 'reset' && !code.trim()) { setErr(t('err.codeInvalid')); return; }
+    setBusy(true); setErr(null);
+    try {
+      const path = tab === 'login' ? 'auth/login' : tab === 'register' ? 'auth/register' : 'auth/reset';
+      const body = tab === 'login' ? { name: n, password: pw } : { name: n, password: pw, code: code.trim() || undefined };
+      const r = await apiPost<{ mfa: string | null; mcName: string; confirmed?: boolean }>(path, body);
+      await refresh();
+      if (r.mfa) return; // seller: the 2FA step renders next
+      showToast(t(tab === 'register' ? (r.confirmed ? 'auth.welcomeConfirmed' : 'auth.welcomeNew') : 'auth.welcome', { name: r.mcName }));
+      afterSignIn(go, cart.length, false);
+    } catch (e2) { setErr(errText(t, e2)); } finally { setBusy(false); }
+  };
 
   return (
     <div className="wrap shop narrow">
-      <PageHead title={t('auth.title')} lead={t('auth.leadMs')} />
+      <PageHead title={t('auth.title')} lead={t('auth.leadPw')} />
       <div className="auth-grid">
         <div className="card auth-card stack">
-          {err && (
-            <div className="notice bad" role="alert">
-              <b>{t(`auth.err.${err}.h`)}</b>
-              <p className="t-small" style={{ margin: '4px 0 0' }}>{t(`auth.err.${err}.b`)}</p>
-            </div>
-          )}
-          {!ready ? (
-            <div className="notice warn"><b>{t('auth.offlineTitle')}</b><p className="t-small" style={{ margin: '4px 0 0' }}>{t('auth.offlineBody')}</p></div>
-          ) : (
-            <>
-              <ol className="steps-list">
-                <li>{t('auth.ms1')}</li>
-                <li>{t('auth.ms2')}</li>
-                <li>{t('auth.ms3')}</li>
-              </ol>
-              <a className="btn btn-primary btn-lg btn-block" href={`/api/auth/microsoft?next=${next}`} aria-busy={busy}
-                onClick={() => setBusy(true)}>{busy ? t('auth.msBusy') : t('auth.msButton')} <Glyph name="arrow" size={14} /></a>
-              <p className="t-small ink2" style={{ margin: 0 }}>{t('auth.msNote')}</p>
-            </>
-          )}
+          <div className="seg auth-tabs" role="radiogroup" aria-label={t('auth.title')}>
+            {(['login', 'register', 'reset'] as const).map((x) => (
+              <button key={x} type="button" role="radio" aria-checked={tab === x} onClick={() => switchTab(x)}>{t(`auth.tab.${x}`)}</button>
+            ))}
+          </div>
+          {tab === 'register' && <p className="t-small ink2" style={{ margin: 0 }}>{t(inviteOnly ? 'auth.registerLeadInvite' : 'auth.registerLead')}</p>}
+          {tab === 'reset' && <p className="t-small ink2" style={{ margin: 0 }}>{t('auth.resetLead')}</p>}
+          <form className="stack" onSubmit={submit} noValidate>
+            <Field label={t('auth.name')} htmlFor="a-name" hint={tab === 'register' ? t('auth.nameHintPw') : undefined}>
+              <input className="field mc" id="a-name" value={name} autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={16} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <PasswordField id="a-pw" label={tab === 'login' ? t('auth.password') : t('auth.newPassword')} value={pw} onChange={setPw}
+              autoComplete={tab === 'login' ? 'current-password' : 'new-password'} hint={tab === 'login' ? undefined : t('auth.pwHint')} />
+            {tab !== 'login' && <PasswordField id="a-pw2" label={t('auth.repeatPassword')} value={pw2} onChange={setPw2} autoComplete="new-password" />}
+            {tab !== 'login' && (
+              <Field label={tab === 'reset' ? t('auth.resetCode') : inviteOnly ? t('auth.inviteCode') : t('auth.inviteCodeOptional')} htmlFor="a-code"
+                hint={tab === 'register' ? t('auth.inviteHint') : undefined}>
+                <input className="field mono" id="a-code" value={code} autoComplete="off" autoCapitalize="characters" spellCheck={false} maxLength={64} onChange={(e) => setCode(e.target.value)} />
+              </Field>
+            )}
+            <ErrorLine msg={err} />
+            <button type="submit" className="btn btn-primary btn-lg" disabled={busy} aria-busy={busy}>
+              {t(tab === 'login' ? 'auth.verify' : tab === 'register' ? 'auth.create' : 'auth.setPassword')} <Glyph name="arrow" size={14} />
+            </button>
+            {tab === 'login' && <p className="t-small mute" style={{ margin: 0 }}><button type="button" className="tlink linkish" onClick={() => switchTab('reset')}>{t('auth.forgot')}</button></p>}
+          </form>
         </div>
         <AuthAside />
       </div>
@@ -342,6 +377,7 @@ export function MyDataPage() {
             : <button type="button" className="btn btn-secondary" disabled>{t('data.exportBtn')}</button>}
         </div>
       </section>
+      {mode === 'live' && <ChangePassword />}
       {mode === 'live' && (
         <section className="card form-card" aria-labelledby="d-sessions">
           <h2 className="t-title" id="d-sessions">{t('data.sessionsTitle')}</h2>
@@ -369,5 +405,35 @@ export function MyDataPage() {
         </section>
       )}
     </div>
+  );
+}
+
+function ChangePassword() {
+  const { t, showToast } = useStore();
+  const [cur, setCur] = useState('');
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pw.length < 10) { setErr(t('err.pwShort')); return; }
+    if (pw !== pw2) { setErr(t('err.pwMismatch')); return; }
+    setErr(null);
+    try { await apiPost('auth/password', { current: cur, password: pw }); setCur(''); setPw(''); setPw2(''); showToast(t('data.pwChanged')); }
+    catch (e2) { setErr(errText(t, e2)); }
+  };
+  return (
+    <section className="card form-card" aria-labelledby="d-pw">
+      <h2 className="t-title" id="d-pw">{t('data.pwTitle')}</h2>
+      <p className="t-small ink2">{t('data.pwBody')}</p>
+      <form className="stack-sm" onSubmit={submit} noValidate>
+        <input type="text" autoComplete="username" hidden readOnly value="" />
+        <PasswordField id="d-cur" label={t('auth.currentPassword')} value={cur} onChange={setCur} autoComplete="current-password" />
+        <PasswordField id="d-new" label={t('auth.newPassword')} value={pw} onChange={setPw} autoComplete="new-password" hint={t('auth.pwHint')} />
+        <PasswordField id="d-new2" label={t('auth.repeatPassword')} value={pw2} onChange={setPw2} autoComplete="new-password" />
+        <ErrorLine msg={err} />
+        <div className="row-gap"><button type="submit" className="btn btn-secondary">{t('data.pwSave')}</button></div>
+      </form>
+    </section>
   );
 }

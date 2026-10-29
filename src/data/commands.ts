@@ -6,14 +6,14 @@
 import type { Account, DB, FarmTier, ID, RatingTags, SellerProfile, TokenType } from '../domain/types.js';
 import {
   ActionError, acceptTerms, advanceClock, approve, blacklistClient, cancelByClient, cancelBySeller, clearBlacklist,
-  clearOrder, complain, declineOrder, deliverBatch, grantToken, markNoticesRead, placeOrder, proposeTerms, rate,
+  clearOrder, complain, confirmName, declineOrder, deliverBatch, grantToken, markNoticesRead, placeOrder, proposeTerms, rate,
   sendMessage, setVacation, startFulfilling, startProcessing, toggleService, updateSeller, type OrderInput,
 } from './actions.js';
 
 type Mut = (db: DB, now: number) => void;
 
 export type OrderCommandInput = Omit<OrderInput, 'clientId'>;
-export type SellerPatch = Partial<Pick<SellerProfile, 'displayName' | 'tagline' | 'accepting' | 'maxConcurrent' | 'weeklyCapacity' | 'blacklistPenaltyDays'>>;
+export type SellerPatch = Partial<Pick<SellerProfile, 'displayName' | 'tagline' | 'accepting' | 'maxConcurrent' | 'weeklyCapacity' | 'blacklistPenaltyDays' | 'inviteOnly'>>;
 
 export type Command =
   | { type: 'placeOrder'; input: OrderCommandInput }
@@ -30,6 +30,7 @@ export type Command =
   | { type: 'clearBlacklist'; clientId: ID }
   | { type: 'grantToken'; clientId: ID; tokenType: TokenType }
   | { type: 'markNoticesRead' }
+  | { type: 'confirmName'; clientId: ID }
   | { type: 'advanceClock'; days: number }; // beta only, refused by the server
 
 export type CommandType = Command['type'];
@@ -37,7 +38,7 @@ export type CommandType = Command['type'];
 /** Commands only the seller may send. The server also requires a finished 2FA step for these. */
 export const SELLER_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>([
   'proposeTerms', 'clearOrder', 'startProcessing', 'startFulfilling', 'deliverBatch', 'declineOrder', 'cancelBySeller',
-  'updateSeller', 'setVacation', 'toggleService', 'blacklistClient', 'clearBlacklist', 'grantToken',
+  'updateSeller', 'setVacation', 'toggleService', 'blacklistClient', 'clearBlacklist', 'grantToken', 'confirmName',
 ]);
 export const BETA_ONLY_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['advanceClock']);
 
@@ -71,6 +72,7 @@ export function toMut(cmd: Command, actor: Account, onId: (id: ID) => void = () 
     case 'clearBlacklist': return clearBlacklist(sellerOf(actor), a, cmd.clientId);
     case 'grantToken': return grantToken(a, cmd.clientId, cmd.tokenType);
     case 'markNoticesRead': return markNoticesRead(a);
+    case 'confirmName': return confirmName(a, cmd.clientId);
     case 'advanceClock': return advanceClock(cmd.days);
   }
 }

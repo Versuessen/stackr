@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useStore } from '../data/store';
 import { Link, useRouter } from '../ui/router';
-import { ConfirmButton, Empty, ErrorLine, Field, PageHead, Stars, StatusChip, TokenPill, fmtDate, fmtN, relDays } from '../ui/components';
+import { AccountName, ConfirmButton, Empty, ErrorLine, Field, PageHead, Stars, StatusChip, TokenPill, fmtDate, fmtN, relDays } from '../ui/components';
 import { useShopStatus } from '../ui/Layout';
 import { orderName, orderSummary } from './Orders';
 import { resetTo } from '../data/actions';
+import { ApiError, apiGet, apiPost } from '../data/api';
 import { DAY, activeBlacklist, clientStats, publicWaitDays, sellerQueue, sellerStats, tokensOf, unusedTokens } from '../domain/rules';
 import type { DB, TokenType } from '../domain/types';
 
@@ -88,7 +89,7 @@ export function BackstagePage() {
                   return (
                     <tr key={o.id}>
                       <td data-l={t('bs.col.order')}><b className="num">#{o.number}</b><span className="t-small ink2 cell-sub">{orderName(o, lang)} · {orderSummary(o, t)}</span></td>
-                      <td data-l={t('bs.col.client')} className="mc">{db.accounts.find((a) => a.id === o.clientId)?.mcName}</td>
+                      <td data-l={t('bs.col.client')}><AccountName account={db.accounts.find((a) => a.id === o.clientId)} /></td>
                       <td data-l={t('bs.col.status')}><StatusChip status={o.status} perspective="seller" /></td>
                       <td data-l={t('bs.col.token')}>{tokens.length ? tokens.map((tok) => <TokenPill key={tok.id} token={tok} />) : '—'}</td>
                       <td data-l={t('bs.col.due')} className="num">{o.dueAt ? fmtDate(o.dueAt, lang, false) : '—'}</td>
@@ -113,19 +114,94 @@ export function BackstagePage() {
 
 const TOKEN_TYPES: TokenType[] = ['priority', 'rush', 'high_effort', 'extra_slot'];
 
+/** A one-time code shown once, with what to type in-game. */
+function CodeBox({ code, name, kind, expiresAt, onClose }: { code: string; name: string; kind: 'invite' | 'reset'; expiresAt: string; onClose: () => void }) {
+  const { t, lang, showToast } = useStore();
+  const msg = `/msg ${name} ${t(kind === 'invite' ? 'inv.msgInvite' : 'inv.msgReset', { code })}`;
+  const copy = () => void navigator.clipboard?.writeText(msg).then(() => showToast(t('auth.copied')), () => {});
+  return (
+    <div className="code-box" role="status">
+      <p className="t-label mute">{t(kind === 'invite' ? 'inv.codeFor' : 'inv.resetFor', { name })}</p>
+      <p className="d-s num mono code-big">{code}</p>
+      <p className="t-small ink2">{t('inv.giveInGame', { date: fmtDate(expiresAt, lang) })}</p>
+      <p className="mono t-small msg-line">{msg}</p>
+      <div className="row-gap">
+        <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>{t('inv.copyMsg')}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>{t('common.close')}</button>
+      </div>
+    </div>
+  );
+}
+
+type Invite = { id: string; name: string; createdAt: string; expiresAt: string };
+
+function InvitesCard() {
+  const { t, lang, mySeller, run, refresh } = useStore();
+  const [name, setName] = useState('');
+  const [made, setMade] = useState<{ code: string; name: string; expiresAt: string; takesOver: boolean } | null>(null);
+  const [list, setList] = useState<Invite[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = React.useCallback(() => { apiGet<{ invites: Invite[] }>('seller/invites').then((r) => setList(r.data?.invites ?? []), () => {}); }, []);
+  React.useEffect(load, [load]);
+  if (!mySeller) return null;
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!/^[A-Za-z0-9_]{3,16}$/.test(name.trim())) { setErr(t('err.badName')); return; }
+    setBusy(true); setErr(null);
+    try {
+      const r = await apiPost<{ code: string; name: string; expiresAt: string; takesOver: boolean }>('seller/invite', { name: name.trim() });
+      setMade(r); setName(''); load();
+    } catch (e2) { setErr(e2 instanceof ApiError ? t(e2.key, e2.vars) : t('err.unknown')); } finally { setBusy(false); }
+  };
+  return (
+    <section className="card form-card invites" aria-labelledby="h-inv">
+      <h2 className="t-title" id="h-inv">{t('inv.title')}</h2>
+      <p className="t-small ink2">{t('inv.lead')}</p>
+      <form className="inline-form" onSubmit={create} noValidate>
+        <label className="sr" htmlFor="inv-name">{t('auth.name')}</label>
+        <input className="field mc" id="inv-name" placeholder={t('auth.name')} value={name} maxLength={16} autoComplete="off" onChange={(e) => setName(e.target.value)} />
+        <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>{t('inv.create')}</button>
+      </form>
+      <ErrorLine msg={err} />
+      {made && <>
+        {made.takesOver && <p className="notice warn">{t('inv.takesOver', { name: made.name })}</p>}
+        <CodeBox code={made.code} name={made.name} kind="invite" expiresAt={made.expiresAt} onClose={() => setMade(null)} />
+      </>}
+      {list.length > 0 && (
+        <ul className="plain inv-list">
+          {list.map((i) => (
+            <li key={i.id}><span className="mc">{i.name}</span><span className="t-small mute">{t('inv.until', { date: fmtDate(i.expiresAt, lang, false) })}</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={async () => { await apiPost('seller/invite/revoke', { id: i.id }).catch(() => {}); load(); }}>{t('inv.revoke')}</button></li>
+          ))}
+        </ul>
+      )}
+      <Switch id="invite-only" on={!!mySeller.inviteOnly} onChange={async (v) => { await run({ type: 'updateSeller', patch: { inviteOnly: v } }); void refresh(); }}
+        title={t('inv.only')} body={t('inv.onlyBody')} />
+    </section>
+  );
+}
+
 export function ClientsPage() {
-  const { t, db, mySeller, me, run, lang, now, showToast } = useStore();
+  const { t, db, mySeller, me, run, lang, now, showToast, mode, refresh } = useStore();
   const [reason, setReason] = useState<Record<string, string>>({});
   const [tokenType, setTokenType] = useState<Record<string, TokenType>>({});
   const [err, setErr] = useState<string | null>(null);
+  const [resetCode, setResetCode] = useState<{ accountId: string; code: string; name: string; expiresAt: string } | null>(null);
   if (!mySeller || !me) return <NotSeller />;
   const s = mySeller;
-  const clientIds = [...new Set(db.orders.filter((o) => o.sellerId === s.id).map((o) => o.clientId))];
-  const clients = clientIds.map((id) => db.accounts.find((a) => a.id === id)).filter((a): a is NonNullable<typeof a> => !!a);
+  const live = mode === 'live';
+  // Live: every registered player (to confirm names before a first order). Beta: players with orders.
+  const clients = (live
+    ? db.accounts.filter((a) => !a.sellerId && !a.deletedAt)
+    : [...new Set(db.orders.filter((o) => o.sellerId === s.id).map((o) => o.clientId))].map((id) => db.accounts.find((a) => a.id === id)).filter((a): a is NonNullable<typeof a> => !!a))
+    .sort((a, b) => Number(!!a.disabledAt) - Number(!!b.disabledAt) || Number(!!a.nameConfirmedAt) - Number(!!b.nameConfirmedAt) || b.createdAt.localeCompare(a.createdAt));
+  const act = async (fn: () => Promise<unknown>) => { setErr(null); try { await fn(); } catch (e) { setErr(e instanceof ApiError ? t(e.key, e.vars) : t('err.unknown')); } };
 
   return (
     <div className="wrap back">
       <PageHead title={t('bs.clients')} lead={t('bs.clientsLead')} aside={<SubNav />} />
+      {live && <InvitesCard />}
       <ErrorLine msg={err} />
       {clients.length === 0 && <Empty title={t('bs.noClients')} />}
       <ul className="clients plain" style={{ marginTop: 24 }}>
@@ -135,7 +211,17 @@ export function ClientsPage() {
           const open = db.orders.filter((o) => o.clientId === c.id && o.sellerId === s.id && !['completed', 'cancelled', 'declined'].includes(o.status)).length;
           return (
             <li key={c.id} className={`client card ${bl && !bl.clearedAt ? 'off' : ''}`}>
-              <div className="client-top"><span className="avatar a2" aria-hidden="true">{c.mcName.slice(0, 2).toUpperCase()}</span><div><b className="mc">{c.mcName}</b> <span className={`badge ${cs.level === 'new' ? 'b-line' : 'b-info'}`}>{t(`level.client.${cs.level}`)}</span></div></div>
+              <div className="client-top"><span className="avatar a2" aria-hidden="true">{c.mcName.slice(0, 2).toUpperCase()}</span><div><b><AccountName account={c} /></b> <span className={`badge ${cs.level === 'new' ? 'b-line' : 'b-info'}`}>{t(`level.client.${cs.level}`)}</span>
+                {live && c.nameConfirmedAt && <span className="badge b-ok">{t('name.confirmed')}</span>}</div></div>
+              {live && !c.disabledAt && (
+                <div className="row-gap name-actions">
+                  {!c.nameConfirmedAt && <button type="button" className="btn btn-primary btn-sm" onClick={async () => { const r = await run({ type: 'confirmName', clientId: c.id }); setErr(r); if (!r) showToast(t('name.confirmedToast', { name: c.mcName })); }}>{t('name.confirm')}</button>}
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => act(async () => { const r = await apiPost<{ code: string; name: string; expiresAt: string }>('seller/reset-code', { accountId: c.id }); setResetCode({ accountId: c.id, ...r }); })}>{t('name.resetCode')}</button>
+                  {!c.nameConfirmedAt && <ConfirmButton id={`rel-${c.id}`} className="btn btn-ghost btn-sm danger" label={t('name.release')} confirmBody={t('name.releaseBody', { name: c.mcName })} confirmLabel={t('name.release')}
+                    onConfirm={() => void act(async () => { await apiPost('seller/release', { accountId: c.id }); await refresh(); showToast(t('name.releasedToast', { name: c.mcName })); })} />}
+                </div>
+              )}
+              {resetCode?.accountId === c.id && <CodeBox code={resetCode.code} name={resetCode.name} kind="reset" expiresAt={resetCode.expiresAt} onClose={() => setResetCode(null)} />}
               <dl className="client-kv">
                 <div><dt>{t('stats.points')}</dt><dd className="num">{cs.points}</dd></div>
                 <div><dt>{t('stats.completed')}</dt><dd className="num">{cs.completed}</dd></div>

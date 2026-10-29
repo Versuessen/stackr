@@ -110,8 +110,16 @@ export function TokenPill({ token }: { token: Pick<Token, 'type'> }) {
   return <span className={`badge ${token.type === 'priority' || token.type === 'rush' ? 'b-ink' : 'b-slime'}`}>{t(`token.${token.type}`)}</span>;
 }
 
+/** A player's Minecraft name. The seller also sees whether the name is confirmed. */
 export function AccountName({ account }: { account?: Account | null }) {
-  return <span className="mc">{account?.mcName ?? '?'}</span>;
+  const { t, mode, mySeller } = useStore();
+  const flag = mode === 'live' && !!mySeller && !!account && !account.sellerId && !account.nameConfirmedAt;
+  return (
+    <span className="acct-name">
+      <span className="mc">{account?.mcName ?? '?'}</span>
+      {flag && <span className={`badge ${account.disabledAt ? 'b-line' : 'b-warn'} name-flag`} title={t(account.disabledAt ? 'name.releasedHint' : 'name.unconfirmedHint')}>{t(account.disabledAt ? 'name.released' : 'name.unconfirmed')}</span>}
+    </span>
+  );
 }
 
 export function Coords({ c }: { c?: Order['coords'] }) {

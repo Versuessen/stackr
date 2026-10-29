@@ -75,6 +75,7 @@ export const command = z.discriminatedUnion('type', [
       maxConcurrent: int(1, 20).optional(),
       weeklyCapacity: int(1, 100).optional(),
       blacklistPenaltyDays: int(0, 365).optional(),
+      inviteOnly: z.boolean().optional(),
     }),
   }),
   z.object({ type: z.literal('setVacation'), on: z.boolean() }),
@@ -83,6 +84,7 @@ export const command = z.discriminatedUnion('type', [
   z.object({ type: z.literal('clearBlacklist'), clientId: id }),
   z.object({ type: z.literal('grantToken'), clientId: id, tokenType: z.enum(['priority', 'rush', 'high_effort', 'extra_slot']) }),
   z.object({ type: z.literal('markNoticesRead') }),
+  z.object({ type: z.literal('confirmName'), clientId: id }),
 ]);
 export type CommandInput = z.infer<typeof command>;
 
@@ -92,3 +94,14 @@ export const secondFactor = z.union([
   z.object({ recovery: z.string().min(10).max(20) }),
 ]);
 export const deleteConfirm = z.object({ confirm: z.string().max(32) });
+
+export const mcName = z.string().trim().regex(/^[A-Za-z0-9_]{3,16}$/);
+const password = z.string().min(1).max(256);
+const code = z.string().trim().max(64).optional().transform((v) => v || undefined);
+export const loginBody = z.object({ name: mcName, password });
+export const registerBody = z.object({ name: mcName, password, code });
+export const resetBody = z.object({ name: mcName, code: z.string().trim().min(8).max(64), password });
+export const changePasswordBody = z.object({ current: password, password });
+export const inviteBody = z.object({ name: mcName });
+export const accountRef = z.object({ accountId: id });
+export const inviteRef = z.object({ id: z.string().regex(/^\d{1,18}$/) });

@@ -45,6 +45,24 @@ const MIGRATIONS = [
      event text not null,
      ip_hash text)`,
   `create index if not exists audit_at on audit_log (at)`,
+  `create table if not exists credentials (
+     account_id text primary key,
+     name_lc text not null unique,
+     pw_hash text not null,
+     created_at timestamptz not null default now(),
+     updated_at timestamptz not null default now())`,
+  `create table if not exists auth_codes (
+     id bigserial primary key,
+     kind text not null check (kind in ('invite', 'reset')),
+     name text not null,
+     name_lc text not null,
+     account_id text,
+     code_hash text not null,
+     created_by text not null,
+     created_at timestamptz not null default now(),
+     expires_at timestamptz not null,
+     used_at timestamptz)`,
+  `create index if not exists auth_codes_lookup on auth_codes (kind, name_lc)`,
 ];
 
 const ready = new WeakMap<Sql, Promise<void>>();
@@ -55,8 +73,8 @@ export function migrate(sql: Sql): Promise<void> {
     p = (async () => {
       // Skip DDL when everything exists, so a least-privilege role (no CREATE rights) works.
       const r = await sql.query<{ n: number }>(
-        "select count(*)::int as n from unnest(array['app_state','sessions','seller_mfa','rate_limits','audit_log']) t where to_regclass('public.' || t) is not null");
-      if (Number(r[0]?.n) === 5) return;
+        "select count(*)::int as n from unnest(array['app_state','sessions','seller_mfa','rate_limits','audit_log','credentials','auth_codes']) t where to_regclass('public.' || t) is not null");
+      if (Number(r[0]?.n) === 7) return;
       for (const m of MIGRATIONS) await sql.query(m);
     })();
     p.catch(() => ready.delete(sql));

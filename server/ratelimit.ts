@@ -29,9 +29,13 @@ export async function limit(sql: Sql, key: string, max: number, windowSec: numbe
 export const LIMITS = {
   anyRequest: [300, 60], // per IP per minute, all API calls
   write: [60, 60], // per IP per minute, state-changing calls
-  loginIp: [15, 600], // sign-in starts per IP per 10 minutes
-  loginGlobal: [300, 600], // all sign-in completions per 10 minutes (abuse brake)
-  mfaAccount: [6, 900], // 2FA attempts per account per 15 minutes
+  loginIp: [20, 600], // password attempts per IP per 10 minutes
+  loginName: [8, 900], // password attempts per account name per 15 minutes (guessing brake)
+  loginGlobal: [500, 600], // all sign-in attempts per 10 minutes (distributed guessing brake)
+  registerIp: [5, 3600], // new accounts per IP per hour
+  codeName: [6, 3600], // invite/reset code attempts per name per hour
+  sellerCodes: [60, 3600], // invite/reset codes the seller creates per hour
+  mfaAccount: [10, 900], // 2FA attempts per account per 15 minutes
   commandAccount: [40, 60], // per account per minute
   messageAccount: [20, 600], // chat messages per account per 10 minutes
   orderAccount: [6, 3600], // new orders per account per hour

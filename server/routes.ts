@@ -1,14 +1,21 @@
 // The whole API in one request handler (one serverless function = one cold start).
 //
 //   GET  /api/state               session + the data this person may see (ETag, 304 when unchanged)
-//   GET  /api/auth/microsoft      start "Sign in with Microsoft" (redirects to Microsoft)
-//   GET  /api/auth/microsoft/callback  Microsoft → Xbox → Minecraft profile, then session cookie
+//   POST /api/auth/register       new account: Minecraft name + password (+ optional invite code)
+//   POST /api/auth/login          name + password
+//   POST /api/auth/reset          new password with a one-time reset code from the seller
+//   POST /api/auth/password       change password (signed in)
 //   POST /api/auth/totp           seller second factor (authenticator code or recovery code)
 //   POST /api/auth/enroll/start   seller: first-time 2FA setup (secret + QR)
 //   POST /api/auth/enroll/confirm seller: confirm setup, receive recovery codes once
 //   POST /api/auth/logout         end this session
 //   POST /api/auth/logout-all     end every session of this account
 //   POST /api/command             run one validated command as the signed-in person
+//   POST /api/seller/invite       seller: invite code bound to one Minecraft name
+//   GET  /api/seller/invites      seller: open invites
+//   POST /api/seller/invite/revoke  seller: withdraw an invite
+//   POST /api/seller/reset-code   seller: one-time password reset code for a client
+//   POST /api/seller/release      seller: free a name claimed by the wrong person
 //   GET  /api/me/export           download everything stored about me (GDPR Art. 15/20)
 //   POST /api/me/delete           erase my account (GDPR Art. 17)
 //   GET  /api/cron                daily housekeeping, Vercel Cron only (CRON_SECRET)
@@ -16,17 +23,23 @@
 import QRCode from 'qrcode';
 import { ZodError } from 'zod';
 import type { Account, DB } from '../src/domain/types.js';
-import { ActionError, deleteAccount, purgeOld, signInVerified } from '../src/data/actions.js';
+import {
+  ActionError, claimSellerAccount, createAccount, deleteAccount, purgeOld, releaseName, touchLogin,
+} from '../src/data/actions.js';
 import { SELLER_COMMANDS, toMut, type Command } from '../src/data/commands.js';
-import { createHash } from 'node:crypto';
 import { decrypt, encrypt, newTotpSecret, normRecovery, randomToken, recoveryCodes, safeEqual, sha256, subKey, verifyTotp } from './crypto.js';
+import { storeCode, useCode } from './codes.js';
 import { audit, migrate, type Sql } from './db.js';
-import { msReady, type Env } from './env.js';
-import { HttpError, OAUTH_COOKIE, checkWriteRequest, clearCookie, clientIp, json, oauthCookie, readCookie, readJson, redirect } from './http.js';
+import type { Env } from './env.js';
+import { HttpError, checkWriteRequest, clearCookie, clientIp, json, readJson } from './http.js';
 import { resolveLines } from './items.js';
-import { MsAuthError, authorizeUrl, minecraftIdentity, type MsFail } from './msAuth.js';
-import { LIMITS, hit, ipHash, limit } from './ratelimit.js';
-import { command as commandSchema, deleteConfirm, secondFactor, sixDigits } from './schemas.js';
+import { lookupName } from './mojang.js';
+import { dummyHash, hashPassword, passwordProblem, verifyPassword } from './passwords.js';
+import { LIMITS, ipHash, limit } from './ratelimit.js';
+import {
+  accountRef, changePasswordBody, command as commandSchema, deleteConfirm, inviteBody, inviteRef, loginBody, registerBody,
+  resetBody, secondFactor, sixDigits,
+} from './schemas.js';
 import { createSession, endAllSessions, endSession, getSession, markMfa, type Session } from './session.js';
 import { mutate, read } from './state.js';
 import { viewFor, type Viewer } from './view.js';
@@ -51,16 +64,15 @@ function routeOf(req: Request): string {
 function accountOf(db: DB, s: Session | null): Account | null {
   if (!s) return null;
   const a = db.accounts.find((x) => x.id === s.accountId);
-  return a && !a.deletedAt ? a : null;
+  return a && !a.deletedAt && !a.disabledAt ? a : null;
 }
 
-/** Seller rights need all three: the seller account, the configured UUID, and a finished 2FA step. */
-function viewerOf(env: Env, db: DB, s: Session | null): Viewer {
+/** Seller rights need the seller account and a finished 2FA step in this session. */
+function viewerOf(db: DB, s: Session | null): Viewer {
   const account = accountOf(db, s);
   if (!account) return null;
-  const isSellerAccount = !!account.sellerId && !!env.sellerUuid && account.mcUuid === env.sellerUuid;
-  if (account.sellerId && !(isSellerAccount && s!.mfaOk)) return null; // pending 2FA: public view only
-  return { account, seller: isSellerAccount && s!.mfaOk };
+  if (account.sellerId && !s!.mfaOk) return null; // pending 2FA: public view only
+  return { account, seller: !!account.sellerId };
 }
 
 async function mfaStateFor(ctx: Ctx, db: DB): Promise<MfaState> {
@@ -79,7 +91,7 @@ function requireAccount(ctx: Ctx, db: DB, opts: { allowPendingSeller?: boolean }
 
 function pendingSeller(ctx: Ctx, db: DB): Account {
   const account = accountOf(db, ctx.session);
-  if (!account?.sellerId || account.mcUuid !== ctx.env.sellerUuid) throw new HttpError(403, 'err.notAllowed');
+  if (!account?.sellerId) throw new HttpError(403, 'err.notAllowed');
   return account;
 }
 
@@ -90,7 +102,7 @@ const mfaKey = (env: Env) => subKey(env.appSecret, 'totp-secret');
 async function getState(ctx: Ctx): Promise<Response> {
   const st = await read(ctx.sql);
   const mfa = await mfaStateFor(ctx, st.db);
-  const viewer = viewerOf(ctx.env, st.db, ctx.session);
+  const viewer = viewerOf(st.db, ctx.session);
   const etag = `"${st.version}.${ctx.session ? sha256(ctx.session.idHash).slice(0, 10) : '0'}.${mfa ?? '-'}.${viewer?.seller ? 's' : 'c'}"`;
   if (ctx.req.headers.get('if-none-match') === etag) return json(null, 304, { etag });
   const pending = mfa ? accountOf(st.db, ctx.session) : null;
@@ -100,60 +112,192 @@ async function getState(ctx: Ctx): Promise<Response> {
     me: viewer?.account.id ?? null,
     pending: pending ? { mcName: pending.mcName } : null,
     mfa,
-    auth: { ready: msReady(ctx.env) },
+    auth: { ready: true },
     db: viewFor(st.db, viewer),
   }, 200, { etag });
 }
 
-const oauthKey = (env: Env) => subKey(env.appSecret, 'oauth-state');
-const NEXT_OK = /^[a-z]{2,12}(-[A-Za-z0-9-]{1,48})?$/;
+// ---------- Accounts: name + password ----------
 
-/** Step 1: remember state + PKCE verifier in an encrypted, HttpOnly cookie and send the browser to Microsoft. */
-async function getMsStart(ctx: Ctx): Promise<Response> {
-  if (!msReady(ctx.env)) return redirect('/?auth_error=unavailable#signin');
-  await limit(ctx.sql, `login:${ctx.ip}`, ...LIMITS.loginIp);
-  const next = new URL(ctx.req.url).searchParams.get('next') ?? '';
-  const state = randomToken(24);
-  const verifier = randomToken(48);
-  const challenge = createHash('sha256').update(verifier).digest('base64url');
-  const packed = encrypt(oauthKey(ctx.env), JSON.stringify({ s: state, v: verifier, n: NEXT_OK.test(next) ? next : '', e: Date.now() + 10 * 60_000 }));
-  return redirect(authorizeUrl(ctx.env, state, challenge), [oauthCookie(packed, 600)]);
+async function mfaFor(sql: Sql, accountId: string): Promise<MfaState> {
+  const rows = await sql.query('select 1 from seller_mfa where account_id = $1 and enrolled_at is not null', [accountId]);
+  return rows.length ? 'needed' : 'enroll';
 }
 
-/** Step 2: Microsoft sends the browser back here with ?code&state. */
-async function getMsCallback(ctx: Ctx): Promise<Response> {
-  const clear = clearCookie(OAUTH_COOKIE);
-  const fail = (reason: MsFail | 'tooMany') => redirect(`/?auth_error=${reason}#signin`, [clear]);
-  try {
-    const q = new URL(ctx.req.url).searchParams;
-    if (q.get('error')) return fail(q.get('error') === 'access_denied' ? 'cancelled' : 'unavailable');
-    let saved: { s: string; v: string; n: string; e: number } | null = null;
-    try { saved = JSON.parse(decrypt(oauthKey(ctx.env), readCookie(ctx.req, OAUTH_COOKIE) ?? '')); } catch { saved = null; }
-    const state = q.get('state') ?? '';
-    const code = q.get('code') ?? '';
-    if (!saved || saved.e < Date.now() || !state || !safeEqual(state, saved.s) || !code || code.length > 2048) return fail('expired');
-    // Each state works exactly once, even if someone captured the cookie.
-    if (!(await hit(ctx.sql, `oauth-state:${sha256(saved.s)}`, 1, 900))) return fail('expired');
-    await limit(ctx.sql, 'login:all', ...LIMITS.loginGlobal);
+/** Always a fresh session id on sign-in (no session fixation). */
+async function startSession(ctx: Ctx, account: Account): Promise<string> {
+  if (ctx.session) await endSession(ctx.sql, ctx.session.idHash);
+  return createSession(ctx.sql, account.id, !!account.sellerId);
+}
 
-    const who = await minecraftIdentity(ctx.env, code, saved.v);
-    const isSeller = !!ctx.env.sellerUuid && who.uuid === ctx.env.sellerUuid;
-    let id = '';
-    await mutate(ctx.sql, signInVerified(who.name, who.uuid, isSeller, (x) => { id = x; }));
-    if (ctx.session) await endSession(ctx.sql, ctx.session.idHash); // fresh session id on every login
-    const cookie = await createSession(ctx.sql, id, isSeller);
-    await audit(ctx.sql, isSeller ? 'login.seller' : 'login', id, ctx.ip);
-    const dest = isSeller ? 'signin' : saved.n || 'home';
-    return redirect(`/?signed_in=1#${dest}`, [cookie, clear]);
+async function signedIn(ctx: Ctx, account: Account, event: string, extra: Record<string, unknown> = {}): Promise<Response> {
+  const cookie = await startSession(ctx, account);
+  await audit(ctx.sql, account.sellerId ? `${event}.seller` : event, account.id, ctx.ip);
+  const mfa = account.sellerId ? await mfaFor(ctx.sql, account.id) : null;
+  return json({ ok: true, mfa, mcName: account.mcName, ...extra }, 200, {}, [cookie]);
+}
+
+async function postLogin(ctx: Ctx): Promise<Response> {
+  const body = loginBody.parse(await readJson(ctx.req));
+  const nameLc = body.name.toLowerCase();
+  await limit(ctx.sql, `login:${ctx.ip}`, ...LIMITS.loginIp);
+  await limit(ctx.sql, `login-name:${sha256(nameLc)}`, ...LIMITS.loginName);
+  await limit(ctx.sql, 'login:all', ...LIMITS.loginGlobal);
+  const rows = await ctx.sql.query<{ account_id: string; pw_hash: string }>('select account_id, pw_hash from credentials where name_lc = $1', [nameLc]);
+  const good = await verifyPassword(body.password, rows[0]?.pw_hash ?? await dummyHash());
+  const st = await read(ctx.sql);
+  const account = rows[0] && good ? st.db.accounts.find((a) => a.id === rows[0].account_id && !a.deletedAt && !a.disabledAt) : undefined;
+  if (!account) {
+    await audit(ctx.sql, 'login.fail', null, ctx.ip);
+    throw new HttpError(400, 'err.loginFailed'); // same message for unknown name and wrong password
+  }
+  await mutate(ctx.sql, touchLogin(account.id));
+  return signedIn(ctx, account, 'login');
+}
+
+async function postRegister(ctx: Ctx): Promise<Response> {
+  const body = registerBody.parse(await readJson(ctx.req));
+  await limit(ctx.sql, `register:${ctx.ip}`, ...LIMITS.registerIp);
+  const weak = passwordProblem(body.password, body.name);
+  if (weak) throw new HttpError(422, weak);
+
+  const who = await lookupName(body.name); // the name must exist; exact spelling + UUID from Mojang
+  const nameLc = who.name.toLowerCase();
+  const st = await read(ctx.sql);
+  const sellerAcc = st.db.accounts.find((a) => a.sellerId);
+  const sellerClaimed = !!sellerAcc && (await ctx.sql.query('select 1 from credentials where account_id = $1', [sellerAcc.id])).length > 0;
+  const isSetup = !!body.code && !!ctx.env.sellerSetupCode && !sellerClaimed && safeEqual(body.code, ctx.env.sellerSetupCode);
+  const inviteOnly = st.db.sellers.some((x) => x.inviteOnly);
+  if (!body.code && inviteOnly) throw new HttpError(403, 'err.inviteRequired');
+
+  // Is the name already claimed? An invite for it may take it back from an unconfirmed claim.
+  const existing = await ctx.sql.query<{ account_id: string }>('select account_id from credentials where name_lc = $1', [nameLc]);
+  const holder = existing[0] ? st.db.accounts.find((a) => a.id === existing[0].account_id) : undefined;
+  const canTakeOver = !!holder && !holder.sellerId && !holder.nameConfirmedAt && !!body.code && !isSetup;
+  if (existing[0] && !canTakeOver) throw new HttpError(409, 'err.nameTaken');
+
+  if (body.code && !isSetup) {
+    await limit(ctx.sql, `code:${sha256(nameLc)}`, ...LIMITS.codeName);
+    const invite = await useCode(ctx.sql, ctx.env, 'invite', nameLc, body.code);
+    if (!invite) throw new HttpError(400, 'err.codeInvalid');
+  }
+  if (canTakeOver && holder) {
+    await mutate(ctx.sql, releaseName(holder.id));
+    await ctx.sql.query('delete from credentials where account_id = $1', [holder.id]);
+    await endAllSessions(ctx.sql, holder.id);
+    await audit(ctx.sql, 'name.released.invite', holder.id, ctx.ip);
+  }
+
+  const id = isSetup ? sellerAcc!.id : `acc-${randomToken(9).replace(/[^A-Za-z0-9]/g, 'x')}`;
+  const pwHash = await hashPassword(body.password);
+  try {
+    await ctx.sql.query('insert into credentials (account_id, name_lc, pw_hash) values ($1, $2, $3)', [id, nameLc, pwHash]);
+  } catch {
+    throw new HttpError(409, 'err.nameTaken'); // lost a race for the same name
+  }
+  try {
+    const out = await mutate(ctx.sql, isSetup ? claimSellerAccount(who.name, who.uuid) : createAccount(id, who.name, who.uuid, !!body.code));
+    const account = out.db.accounts.find((a) => a.id === id)!;
+    return signedIn(ctx, account, isSetup ? 'register.setup' : 'register', { confirmed: !!account.nameConfirmedAt });
   } catch (e) {
-    if (e instanceof MsAuthError) {
-      await audit(ctx.sql, `login.fail.${e.reason}`, null, ctx.ip);
-      return fail(e.reason);
-    }
-    if (e instanceof HttpError && e.status === 429) return fail('tooMany');
-    if (e instanceof ActionError) return fail('unavailable');
+    await ctx.sql.query('delete from credentials where account_id = $1', [id]);
     throw e;
   }
+}
+
+async function postReset(ctx: Ctx): Promise<Response> {
+  const body = resetBody.parse(await readJson(ctx.req));
+  const nameLc = body.name.toLowerCase();
+  await limit(ctx.sql, `login:${ctx.ip}`, ...LIMITS.loginIp);
+  await limit(ctx.sql, `code:${sha256(nameLc)}`, ...LIMITS.codeName);
+  const weak = passwordProblem(body.password, body.name);
+  if (weak) throw new HttpError(422, weak);
+  const cred = (await ctx.sql.query<{ account_id: string }>('select account_id from credentials where name_lc = $1', [nameLc]))[0];
+  const st = await read(ctx.sql);
+  const account = cred ? st.db.accounts.find((a) => a.id === cred.account_id && !a.deletedAt && !a.disabledAt) : undefined;
+  if (!account) throw new HttpError(400, 'err.codeInvalid');
+  // Clients get reset codes from the seller; the seller resets with the setup code (2FA still applies).
+  const ok = account.sellerId
+    ? !!ctx.env.sellerSetupCode && safeEqual(body.code, ctx.env.sellerSetupCode)
+    : (await useCode(ctx.sql, ctx.env, 'reset', nameLc, body.code))?.account_id === account.id;
+  if (!ok) { await audit(ctx.sql, 'reset.fail', account.id, ctx.ip); throw new HttpError(400, 'err.codeInvalid'); }
+  await ctx.sql.query('update credentials set pw_hash = $2, updated_at = now() where account_id = $1', [account.id, await hashPassword(body.password)]);
+  await endAllSessions(ctx.sql, account.id);
+  return signedIn(ctx, account, 'reset');
+}
+
+async function postChangePassword(ctx: Ctx): Promise<Response> {
+  const st = await read(ctx.sql);
+  const account = requireAccount(ctx, st.db);
+  await limit(ctx.sql, `login-name:${sha256(account.mcName.toLowerCase())}`, ...LIMITS.loginName);
+  const body = changePasswordBody.parse(await readJson(ctx.req));
+  const row = (await ctx.sql.query<{ pw_hash: string }>('select pw_hash from credentials where account_id = $1', [account.id]))[0];
+  if (!row || !(await verifyPassword(body.current, row.pw_hash))) throw new HttpError(400, 'err.pwCurrent');
+  const weak = passwordProblem(body.password, account.mcName);
+  if (weak) throw new HttpError(422, weak);
+  await ctx.sql.query('update credentials set pw_hash = $2, updated_at = now() where account_id = $1', [account.id, await hashPassword(body.password)]);
+  await ctx.sql.query('delete from sessions where account_id = $1 and id_hash <> $2', [account.id, ctx.session!.idHash]);
+  await audit(ctx.sql, 'password.changed', account.id, ctx.ip);
+  return json({ ok: true });
+}
+
+// ---------- Seller: invites, reset codes, releasing names ----------
+
+async function requireSeller(ctx: Ctx): Promise<{ db: DB; account: Account }> {
+  const st = await read(ctx.sql);
+  const v = viewerOf(st.db, ctx.session);
+  if (!v?.seller) throw new HttpError(403, 'err.notAllowed');
+  return { db: st.db, account: v.account };
+}
+
+async function postInvite(ctx: Ctx): Promise<Response> {
+  const { account } = await requireSeller(ctx);
+  await limit(ctx.sql, `seller-codes:${account.id}`, ...LIMITS.sellerCodes);
+  const body = inviteBody.parse(await readJson(ctx.req));
+  const who = await lookupName(body.name);
+  const st = await read(ctx.sql);
+  const holder = st.db.accounts.find((a) => !a.deletedAt && !a.disabledAt && a.mcName.toLowerCase() === who.name.toLowerCase());
+  if (holder && (holder.nameConfirmedAt || holder.sellerId)) throw new HttpError(409, 'err.nameTaken');
+  const c = await storeCode(ctx.sql, ctx.env, 'invite', who.name, null, account.id);
+  await audit(ctx.sql, 'invite.create', account.id, ctx.ip);
+  return json({ ok: true, ...c, name: who.name, takesOver: !!holder });
+}
+
+async function getInvites(ctx: Ctx): Promise<Response> {
+  await requireSeller(ctx);
+  const rows = await ctx.sql.query<{ id: string; name: string; created_at: string; expires_at: string }>(
+    "select id, name, created_at, expires_at from auth_codes where kind = 'invite' and used_at is null and expires_at > now() order by created_at desc limit 100");
+  return json({ invites: rows.map((r) => ({ id: String(r.id), name: r.name, createdAt: new Date(r.created_at).toISOString(), expiresAt: new Date(r.expires_at).toISOString() })) });
+}
+
+async function postRevokeInvite(ctx: Ctx): Promise<Response> {
+  const { account } = await requireSeller(ctx);
+  const { id } = inviteRef.parse(await readJson(ctx.req));
+  await ctx.sql.query("delete from auth_codes where id = $1 and kind = 'invite' and used_at is null", [id]);
+  await audit(ctx.sql, 'invite.revoke', account.id, ctx.ip);
+  return json({ ok: true });
+}
+
+async function postResetCode(ctx: Ctx): Promise<Response> {
+  const { db, account } = await requireSeller(ctx);
+  await limit(ctx.sql, `seller-codes:${account.id}`, ...LIMITS.sellerCodes);
+  const { accountId } = accountRef.parse(await readJson(ctx.req));
+  const target = db.accounts.find((a) => a.id === accountId && !a.deletedAt && !a.disabledAt && !a.sellerId);
+  const cred = target && (await ctx.sql.query('select 1 from credentials where account_id = $1', [target.id]))[0];
+  if (!target || !cred) throw new HttpError(404, 'err.accountMissing');
+  const c = await storeCode(ctx.sql, ctx.env, 'reset', target.mcName, target.id, account.id);
+  await audit(ctx.sql, 'reset.create', account.id, ctx.ip);
+  return json({ ok: true, ...c, name: target.mcName });
+}
+
+async function postRelease(ctx: Ctx): Promise<Response> {
+  const { account } = await requireSeller(ctx);
+  const { accountId } = accountRef.parse(await readJson(ctx.req));
+  const st = await mutate(ctx.sql, releaseName(accountId));
+  await ctx.sql.query('delete from credentials where account_id = $1', [accountId]);
+  await endAllSessions(ctx.sql, accountId);
+  await audit(ctx.sql, 'name.released', account.id, ctx.ip);
+  return json({ ok: true, version: st.version, db: viewFor(st.db, viewerOf(st.db, ctx.session)) });
 }
 
 async function postTotp(ctx: Ctx): Promise<Response> {
@@ -228,7 +372,7 @@ async function postLogout(ctx: Ctx, all: boolean): Promise<Response> {
 async function postCommand(ctx: Ctx): Promise<Response> {
   const cur = await read(ctx.sql);
   const account = requireAccount(ctx, cur.db);
-  const viewer = viewerOf(ctx.env, cur.db, ctx.session)!;
+  const viewer = viewerOf(cur.db, ctx.session)!;
   await limit(ctx.sql, `cmd:${account.id}`, ...LIMITS.commandAccount);
   const raw = await readJson(ctx.req) as { cmd?: unknown };
   const parsed = commandSchema.parse(raw?.cmd);
@@ -244,7 +388,7 @@ async function postCommand(ctx: Ctx): Promise<Response> {
   let id: string | undefined;
   const st = await mutate(ctx.sql, toMut(cmd, account, (x) => { id = x; }));
   if (viewer.seller) await audit(ctx.sql, `cmd.${cmd.type}`, account.id, ctx.ip);
-  const fresh = viewerOf(ctx.env, st.db, ctx.session);
+  const fresh = viewerOf(st.db, ctx.session);
   return json({ ok: true, id, version: st.version, db: viewFor(st.db, fresh) });
 }
 
@@ -273,6 +417,8 @@ async function postDelete(ctx: Ctx): Promise<Response> {
   const { confirm } = deleteConfirm.parse(await readJson(ctx.req));
   if (confirm.trim().toLowerCase() !== account.mcName.toLowerCase()) throw new HttpError(400, 'err.confirmName');
   await mutate(ctx.sql, deleteAccount(account.id));
+  await ctx.sql.query('delete from credentials where account_id = $1', [account.id]);
+  await ctx.sql.query('delete from auth_codes where account_id = $1 or name_lc = $2', [account.id, account.mcName.toLowerCase()]);
   await endAllSessions(ctx.sql, account.id);
   await audit(ctx.sql, 'account.delete', account.id, null);
   return json({ ok: true }, 200, {}, [clearCookie()]);
@@ -288,6 +434,7 @@ async function getCron(ctx: Ctx): Promise<Response> {
     rateLimits: await del("delete from rate_limits where reset_at < now() - interval '1 day'"),
     audit: await del("delete from audit_log where at < now() - interval '90 days'"),
     pendingMfa: await del("delete from seller_mfa where enrolled_at is null and updated_at < now() - interval '1 day'"),
+    codes: await del("delete from auth_codes where expires_at < now() - interval '7 days'"),
   };
   return json({ ok: true, ...result });
 }
@@ -318,8 +465,15 @@ export function createHandler(env: Env | null, sql: Sql | null) {
       const key = `${method} ${path}`;
       switch (key) {
         case 'GET state': return await getState(ctx);
-        case 'GET auth/microsoft': return await getMsStart(ctx);
-        case 'GET auth/microsoft/callback': return await getMsCallback(ctx);
+        case 'POST auth/login': return await postLogin(ctx);
+        case 'POST auth/register': return await postRegister(ctx);
+        case 'POST auth/reset': return await postReset(ctx);
+        case 'POST auth/password': return await postChangePassword(ctx);
+        case 'POST seller/invite': return await postInvite(ctx);
+        case 'GET seller/invites': return await getInvites(ctx);
+        case 'POST seller/invite/revoke': return await postRevokeInvite(ctx);
+        case 'POST seller/reset-code': return await postResetCode(ctx);
+        case 'POST seller/release': return await postRelease(ctx);
         case 'POST auth/totp': return await postTotp(ctx);
         case 'POST auth/enroll/start': return await postEnrollStart(ctx);
         case 'POST auth/enroll/confirm': return await postEnrollConfirm(ctx);

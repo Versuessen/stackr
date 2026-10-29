@@ -1,5 +1,5 @@
-// End-to-end API test: real Postgres (PGlite, in-process), mocked Microsoft / Xbox / Minecraft
-// endpoints, and the real request handler. Run with: npm run test:api
+// End-to-end API test: real Postgres (PGlite, in-process), a mocked Mojang name lookup, and the
+// real request handler. Run with: npm run test:api
 import { PGlite } from '@electric-sql/pglite';
 import { createHandler } from '../routes.js';
 import { readEnv } from '../env.js';
@@ -10,85 +10,44 @@ import type { DB } from '../../src/domain/types.js';
 let failures = 0;
 const ok = (cond: unknown, msg: string) => { if (cond) console.log('  ✓', msg); else { failures++; console.error('  ✗', msg); } };
 
-const SELLER_UUID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-
-// ---------- Mock of the Microsoft → Xbox → Minecraft chain ----------
-// An authorization code maps to a player; special codes trigger the failure branches.
-const players = new Map<string, { name: string; id: string } | 'child' | 'noXbox' | 'unapproved' | 'noProfile'>();
-const seenVerifiers: string[] = [];
+// Mojang's public name lookup: every name exists except ones starting with "Nobody".
 const realFetch = globalThis.fetch;
-const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+const uuidOf = (name: string) => [...name.toLowerCase().padEnd(32, '0')].map((c) => (c.charCodeAt(0) % 16).toString(16)).join('').slice(0, 32);
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input instanceof Request ? input.url : input);
-  const body = typeof init?.body === 'string' ? init.body : init?.body instanceof URLSearchParams ? init.body.toString() : '';
-  if (url.startsWith('https://login.microsoftonline.com/consumers/oauth2/v2.0/token')) {
-    const f = new URLSearchParams(body);
-    if (f.get('client_secret') !== 'test-client-secret' || f.get('redirect_uri') !== 'https://stackr.test/api/auth/microsoft/callback') return reply(401, { error: 'invalid_client' });
-    seenVerifiers.push(f.get('code_verifier') ?? '');
-    const code = f.get('code') ?? '';
-    if (!players.has(code)) return reply(400, { error: 'invalid_grant' });
-    return reply(200, { access_token: `ms-token-${code}`, token_type: 'Bearer' });
-  }
-  if (url === 'https://user.auth.xboxlive.com/user/authenticate') {
-    const ticket = JSON.parse(body).Properties.RpsTicket as string;
-    return reply(200, { Token: `xbl-token-${ticket.slice(11)}`, DisplayClaims: { xui: [{ uhs: 'uhs123' }] } });
-  }
-  if (url === 'https://xsts.auth.xboxlive.com/xsts/authorize') {
-    const j = JSON.parse(body);
-    const code = (j.Properties.UserTokens[0] as string).slice(10);
-    if (j.RelyingParty !== 'rp://api.minecraftservices.com/') return reply(400, {});
-    const p = players.get(code);
-    if (p === 'child') return reply(401, { XErr: 2148916238 });
-    if (p === 'noXbox') return reply(401, { XErr: 2148916233 });
-    return reply(200, { Token: `xsts-token-${code}`, DisplayClaims: { xui: [{ uhs: 'uhs123' }] } });
-  }
-  if (url === 'https://api.minecraftservices.com/authentication/login_with_xbox') {
-    const m = /^XBL3\.0 x=uhs123;xsts-token-(.+)$/.exec(JSON.parse(body).identityToken);
-    if (!m) return reply(400, {});
-    if (players.get(m[1]) === 'unapproved') return reply(403, { error: 'Invalid app registration' });
-    return reply(200, { access_token: `mc-token-${m[1]}`, token_type: 'Bearer', expires_in: 86400 });
-  }
-  if (url === 'https://api.minecraftservices.com/minecraft/profile') {
-    const code = String((init?.headers as Record<string, string>)?.authorization ?? '').replace('Bearer mc-token-', '');
-    const p = players.get(code);
-    if (!p || typeof p === 'string') return reply(404, { error: 'NOT_FOUND' });
-    return reply(200, { id: p.id, name: p.name, skins: [], capes: [] });
+  const m = /^https:\/\/api\.mojang\.com\/users\/profiles\/minecraft\/([^/?]+)$/.exec(url);
+  if (m) {
+    const name = decodeURIComponent(m[1]);
+    if (name.toLowerCase().startsWith('nobody')) return new Response(null, { status: 404 });
+    const canonical = name.toLowerCase() === 'kiesel_kai' ? 'Kiesel_Kai' : name; // Mojang returns the real spelling
+    return new Response(JSON.stringify({ id: uuidOf(canonical), name: canonical }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
   return realFetch(input, init);
 }) as typeof fetch;
 
+const SETUP = 'setup-code-0123456789-abcdef';
 const pg = new PGlite();
 const sql: Sql = { query: async (t, p = []) => (await pg.query(t, p as never[])).rows as never };
-const env = readEnv({
-  DATABASE_URL: 'pglite', APP_SECRET: 'x'.repeat(48), SELLER_MC_UUID: SELLER_UUID, CRON_SECRET: 'cron-secret-123',
-  MS_CLIENT_ID: 'test-client-id', MS_CLIENT_SECRET: 'test-client-secret', SITE_URL: 'https://stackr.test',
-})!;
+const env = readEnv({ DATABASE_URL: 'pglite', APP_SECRET: 'x'.repeat(48), CRON_SECRET: 'cron-secret-123', SELLER_SETUP_CODE: SETUP })!;
 const handle = createHandler(env, sql);
 
 const ORIGIN = 'https://stackr.test';
-type Res = { status: number; body: any; cookie: string | null; cookies: string[]; headers: Headers };
+type Res = { status: number; body: any; cookie: string | null; headers: Headers };
 async function call(method: string, path: string, opts: { body?: unknown; cookie?: string | null; ip?: string; headers?: Record<string, string> } = {}): Promise<Res> {
   const h: Record<string, string> = { host: 'stackr.test', 'x-real-ip': opts.ip ?? '10.0.0.1', ...opts.headers };
   if (method === 'POST') Object.assign(h, { origin: ORIGIN, 'x-stackr': '1', 'content-type': 'application/json' }, opts.headers);
   if (opts.cookie) h.cookie = opts.cookie;
   const res = await handle(new Request(`${ORIGIN}/api/${path}`, { method, headers: h, body: method === 'POST' ? JSON.stringify(opts.body ?? {}) : undefined }));
-  const cookies = res.headers.getSetCookie();
-  const sid = cookies.find((c) => c.startsWith('__Host-stackr_sid=') && !c.startsWith('__Host-stackr_sid=;'));
+  const sid = res.headers.getSetCookie().find((c) => c.startsWith('__Host-stackr_sid=') && !c.startsWith('__Host-stackr_sid=;'));
   const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : null, cookie: sid ? sid.split(';')[0] : null, cookies, headers: res.headers };
+  return { status: res.status, body: text ? JSON.parse(text) : null, cookie: sid ? sid.split(';')[0] : null, headers: res.headers };
 }
-let codeN = 0;
-/** Full browser round trip: /auth/microsoft → (Microsoft) → /auth/microsoft/callback. */
-async function login(player: { name: string; id: string } | 'child' | 'noXbox' | 'unapproved' | 'noProfile', ip = '10.0.0.1', next = '') {
-  const start = await call('GET', `auth/microsoft${next ? `?next=${next}` : ''}`, { ip });
-  const loc = new URL(start.headers.get('location')!);
-  const oauth = start.cookies.find((c) => c.startsWith('__Host-stackr_oauth='))!.split(';')[0];
-  const code = `code${++codeN}`;
-  players.set(code, player);
-  const cb = await call('GET', `auth/microsoft/callback?code=${code}&state=${loc.searchParams.get('state')}`, { ip, cookie: oauth });
-  return { start, loc, oauth, cb, location: cb.headers.get('location') ?? '', cookie: cb.cookie };
-}
+let ipN = 20;
+const freshIp = () => `10.1.0.${++ipN}`;
+const register = (name: string, password: string, code?: string, ip = freshIp()) => call('POST', 'auth/register', { body: { name, password, code }, ip });
+const login = (name: string, password: string, ip = freshIp()) => call('POST', 'auth/login', { body: { name, password }, ip });
 const cmd = (cookie: string, c: unknown) => call('POST', 'command', { cookie, body: { cmd: c } });
+const PW = 'blauer-kaktus-42';
 
 console.log('beta fallback');
 {
@@ -99,49 +58,47 @@ console.log('beta fallback');
 
 console.log('anonymous view');
 const anon = await call('GET', 'state');
-ok(anon.status === 200 && anon.body.mode === 'live' && anon.body.auth.ready === true, 'state is live, Microsoft sign-in ready');
+ok(anon.status === 200 && anon.body.mode === 'live', 'state is live');
 ok(anon.body.me === null && anon.body.db.accounts.length === 1, 'only the seller account is visible');
 ok(anon.headers.get('cache-control') === 'no-store', 'API responses are no-store');
 
 console.log('CSRF checks');
-ok((await call('POST', 'auth/logout', { headers: { origin: 'https://evil.test' } })).status === 403, 'foreign Origin rejected');
-ok((await call('POST', 'auth/logout', { headers: { 'x-stackr': '0' } })).status === 403, 'missing custom header rejected');
+ok((await call('POST', 'auth/login', { body: { name: 'abc', password: 'x' }, headers: { origin: 'https://evil.test' } })).status === 403, 'foreign Origin rejected');
+ok((await call('POST', 'auth/login', { body: { name: 'abc', password: 'x' }, headers: { 'x-stackr': '0' } })).status === 403, 'missing custom header rejected');
 
-console.log('Microsoft sign-in');
-const first = await login({ name: 'Kiesel_Kai', id: 'b'.repeat(32) }, '10.0.0.1', 'items');
-ok(first.start.status === 302 && first.loc.origin + first.loc.pathname === 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize', 'start redirects to Microsoft (consumers tenant)');
-ok(first.loc.searchParams.get('scope') === 'XboxLive.signin' && first.loc.searchParams.get('code_challenge_method') === 'S256' && (first.loc.searchParams.get('state') ?? '').length >= 32, 'PKCE S256, state, minimal scope (no offline_access)');
-ok(first.loc.searchParams.get('redirect_uri') === 'https://stackr.test/api/auth/microsoft/callback', 'fixed redirect URI from SITE_URL');
-ok(/HttpOnly/.test(first.start.cookies[0]) && /Secure/.test(first.start.cookies[0]) && /Max-Age=600/.test(first.start.cookies[0]), 'state cookie HttpOnly, Secure, 10 min');
-ok(!first.oauth.includes(first.loc.searchParams.get('state')!), 'state cookie is encrypted');
-ok(seenVerifiers.length === 1 && seenVerifiers[0].length >= 43, 'PKCE verifier sent to Microsoft');
-ok(first.location === '/?signed_in=1#items' && !!first.cookie, 'signed in, back to where the player was');
-ok(first.cb.cookies.some((c) => c.startsWith('__Host-stackr_oauth=;')), 'state cookie cleared after use');
-const replay = await call('GET', `auth/microsoft/callback?code=code1&state=${first.loc.searchParams.get('state')}`, { cookie: first.oauth });
-ok(replay.headers.get('location') === '/?auth_error=expired#signin' && !replay.cookie, 'replayed code rejected');
-const forged = await call('GET', 'auth/microsoft/callback?code=x&state=forged', { cookie: first.oauth });
-ok(forged.headers.get('location') === '/?auth_error=expired#signin', 'state mismatch rejected (login CSRF)');
-ok((await call('GET', 'auth/microsoft/callback?code=x&state=y')).headers.get('location') === '/?auth_error=expired#signin', 'callback without state cookie rejected');
-ok((await call('GET', 'auth/microsoft/callback?error=access_denied&state=y')).headers.get('location') === '/?auth_error=cancelled#signin', 'cancel at Microsoft handled');
-ok((await login('child')).location === '/?auth_error=child#signin', 'child account → clear message');
-ok((await login('noXbox')).location === '/?auth_error=noXbox#signin', 'no Xbox profile → clear message');
-ok((await login('unapproved')).location === '/?auth_error=notApproved#signin', 'app not yet approved by Mojang → clear message');
-ok((await login('noProfile')).location === '/?auth_error=noProfile#signin', 'no Minecraft Java profile → clear message');
-const evilNext = await call('GET', 'auth/microsoft?next=//evil.test');
-ok(!/evil/.test(decodeURIComponent(evilNext.headers.get('location') ?? '')), 'open redirect via next is impossible');
-
-const second = await login({ name: 'Mo0nmoth', id: 'c'.repeat(32) }, '10.0.0.2');
-const rawCookie = second.cb.cookies.find((c) => c.startsWith('__Host-stackr_sid='))!;
+console.log('registration');
+ok((await register('Kiesel_Kai', 'kurz')).body.error.key === 'err.pwShort', 'short password rejected');
+ok((await register('Kiesel_Kai', 'kiesel_kai_rocks')).body.error.key === 'err.pwWeak', 'password containing the name rejected');
+ok((await register('NobodyHere', PW)).body.error.key === 'err.nameUnknown', 'name that does not exist at Mojang rejected');
+ok((await register('bad name!', PW)).status === 400, 'invalid name rejected');
+const a = await register('kiesel_kai', PW);
+ok(a.status === 200 && a.body.mfa === null && a.body.confirmed === false && a.body.mcName === 'Kiesel_Kai', 'open sign-up works, exact spelling from Mojang, name unconfirmed');
+const rawCookie = (await (async () => {
+  const r = await handle(new Request(`${ORIGIN}/api/auth/register`, { method: 'POST', headers: { host: 'stackr.test', origin: ORIGIN, 'x-stackr': '1', 'content-type': 'application/json', 'x-real-ip': '10.0.0.2' }, body: JSON.stringify({ name: 'Mo0nmoth', password: PW }) }));
+  return r.headers.getSetCookie().find((c) => c.startsWith('__Host-stackr_sid='))!;
+})());
 ok(/^__Host-stackr_sid=[A-Za-z0-9_-]{43};/.test(rawCookie) && /HttpOnly/.test(rawCookie) && /Secure/.test(rawCookie) && /SameSite=Lax/.test(rawCookie), 'session cookie is __Host-, HttpOnly, Secure, SameSite');
-const A = first.cookie!;
-const B = second.cookie!;
+ok((await register('KIESEL_KAI', PW)).body.error.key === 'err.nameTaken', 'name already taken (case-insensitive)');
+const A = a.cookie!;
+const B = rawCookie.split(';')[0];
 const stA = await call('GET', 'state', { cookie: A });
+const meA = stA.body.db.accounts.find((x: any) => x.id === stA.body.me);
 ok(stA.body.me && stA.body.db.tokens.length === 1, 'new client gets a welcome token');
-ok(stA.body.db.accounts.find((x: any) => x.id === stA.body.me).mcUuid === 'b'.repeat(32), 'UUID comes from the Minecraft profile');
+ok(meA.mcUuid === uuidOf('Kiesel_Kai') && !meA.nameConfirmedAt, 'UUID from Mojang stored, name not confirmed yet');
+const cred = await sql.query<{ pw_hash: string }>('select pw_hash from credentials');
+ok(cred.every((r) => r.pw_hash.startsWith('scrypt$32768$8$1$')) && !JSON.stringify(cred).includes(PW), 'passwords stored only as scrypt hashes');
+ok(!JSON.stringify(await sql.query('select doc from app_state')).includes('scrypt$'), 'no password hash in the shop document');
 const rows = await sql.query<{ id_hash: string }>('select id_hash from sessions');
-ok(rows.every((r) => /^[0-9a-f]{64}$/.test(r.id_hash)) && !rows.some((r) => A.includes(r.id_hash)), 'only token hashes are stored');
-const tables = JSON.stringify(await sql.query("select * from app_state")) + JSON.stringify(await sql.query("select * from audit_log"));
-ok(!/ms-token|xbl-token|xsts-token|mc-token/.test(tables), 'no Microsoft/Xbox/Minecraft tokens stored');
+ok(rows.every((r) => /^[0-9a-f]{64}$/.test(r.id_hash)) && !rows.some((r) => A.includes(r.id_hash)), 'only session token hashes are stored');
+
+console.log('login');
+ok((await login('Kiesel_Kai', 'wrong-password-1')).body.error.key === 'err.loginFailed', 'wrong password rejected');
+ok((await login('NoSuchPlayer1', PW)).body.error.key === 'err.loginFailed', 'unknown name gives the same message');
+const relog = await login('kiesel_kai', PW);
+ok(relog.status === 200 && !!relog.cookie && relog.cookie !== A, 'login works (case-insensitive) with a fresh session id');
+let lockedStatus = 0;
+for (let i = 0; i < 9; i++) lockedStatus = (await login('Mo0nmoth', 'guess-number-' + i)).status;
+ok(lockedStatus === 429, 'password guessing on one name is throttled (across IPs)');
 
 console.log('ordering');
 const svc = 'seller-1-items';
@@ -174,14 +131,16 @@ ok((await cmd(A, { type: 'proposeTerms', orderId: order.body.id, price: '1', day
 ok((await cmd(A, { type: 'advanceClock', days: 30 })).status === 400, 'beta clock tool refused');
 ok((await call('GET', 'state')).body.db.orders.every((o: any) => o.title === '' && o.messages.length === 0), 'anonymous view has no order content');
 
-console.log('seller 2FA');
-const s = await login({ name: 'RealSeller', id: SELLER_UUID }, '10.0.0.5', 'items');
-ok(s.location === '/?signed_in=1#signin', 'seller goes to the 2FA step');
+console.log('seller setup + 2FA');
+ok((await register('RealSeller', PW, 'wrong-setup-code-1234567')).body.error.key === 'err.codeInvalid', 'wrong setup code does nothing');
+const s = await register('RealSeller', PW, SETUP);
+ok(s.status === 200 && s.body.mfa === 'enroll', 'setup code claims the seller account, 2FA setup next');
+ok((await register('SomeoneElse', PW, SETUP)).body.error.key === 'err.codeInvalid', 'setup code works only once');
 const S = s.cookie!;
 const pendingState = await call('GET', 'state', { cookie: S });
-ok(pendingState.body.mfa === 'enroll', 'seller must set up 2FA first');
 ok(pendingState.body.me === null && pendingState.body.mfa === 'enroll' && pendingState.body.db.orders.every((o: any) => o.title === ''), 'before 2FA the seller sees only public data');
 ok((await cmd(S, { type: 'proposeTerms', orderId: order.body.id, price: '1', days: 2, note: '' })).status === 401, 'seller commands blocked before 2FA');
+ok((await call('POST', 'seller/invite', { cookie: S, body: { name: 'Steve' } })).status === 403, 'seller tools blocked before 2FA');
 ok((await call('POST', 'auth/enroll/start', { cookie: A })).status === 403, 'clients cannot enroll 2FA');
 const en = await call('POST', 'auth/enroll/start', { cookie: S });
 ok(en.status === 200 && /^[A-Z2-7]{32}$/.test(en.body.secret) && en.body.qr.startsWith('<svg'), 'enrollment returns secret and QR');
@@ -193,17 +152,49 @@ const conf = await call('POST', 'auth/enroll/confirm', { cookie: S, body: { code
 ok(conf.status === 200 && conf.body.recovery.length === 8, 'enrolled, 8 recovery codes');
 const sellerState = await call('GET', 'state', { cookie: S });
 ok(sellerState.body.me === 'acc-seller' && sellerState.body.db.orders.some((o: any) => o.title.startsWith('Netherit')), 'after 2FA the seller sees order details');
-ok(sellerState.body.db.accounts.find((x: any) => x.id === 'acc-seller').mcName === 'RealSeller', 'seller account linked by UUID');
+ok(sellerState.body.db.accounts.find((x: any) => x.id === 'acc-seller').mcName === 'RealSeller', 'seller account carries the real name');
 
 console.log('second seller login');
-const s2 = await login({ name: 'RealSeller', id: SELLER_UUID }, '10.0.0.9');
-ok((await call('GET', 'state', { cookie: s2.cookie })).body.mfa === 'needed', 'next login asks for the code');
+const s2 = await login('RealSeller', PW);
+ok(s2.body.mfa === 'needed', 'next login asks for the code');
 const S2 = s2.cookie!;
 ok((await call('POST', 'auth/totp', { cookie: S2, body: { code: totpAt(en.body.secret, step) } })).status === 400, 'used TOTP code cannot be replayed');
 ok((await call('POST', 'auth/totp', { cookie: S2, body: { recovery: conf.body.recovery[0] } })).status === 200, 'recovery code works');
-const S3 = (await login({ name: 'RealSeller', id: SELLER_UUID }, '10.0.0.9')).cookie!;
+const S3 = (await login('RealSeller', PW)).cookie!;
 ok((await call('POST', 'auth/totp', { cookie: S3, body: { recovery: conf.body.recovery[0] } })).status === 400, 'recovery code is single-use');
 ok((await call('POST', 'auth/totp', { cookie: A, body: { code: '123456' } })).status === 403, 'client cannot use the seller 2FA endpoint');
+
+console.log('confirming names, invites, impostors');
+ok((await cmd(A, { type: 'confirmName', clientId: stA.body.me })).status === 403, 'clients cannot confirm names');
+const clientA = stA.body.me as string;
+ok((await cmd(S, { type: 'confirmName', clientId: clientA })).status === 200, 'seller confirms a name after seeing the player');
+ok((await call('GET', 'state', { cookie: A })).body.db.accounts.find((x: any) => x.id === clientA).nameConfirmedAt, 'player sees the name as confirmed');
+ok((await call('POST', 'seller/invite', { cookie: A, body: { name: 'Steve' } })).status === 403, 'clients cannot create invites');
+ok((await call('POST', 'seller/invite', { cookie: S, body: { name: 'Kiesel_Kai' } })).body.error.key === 'err.nameTaken', 'no invite for a confirmed name');
+const inv = await call('POST', 'seller/invite', { cookie: S, body: { name: 'steve' } });
+ok(inv.status === 200 && /^[A-Z2-7]{5}-[A-Z2-7]{5}$/.test(inv.body.code) && inv.body.name === 'steve', 'invite code bound to one name');
+ok(!JSON.stringify(await sql.query('select * from auth_codes')).includes(inv.body.code.replace('-', '')), 'codes stored only as hashes');
+ok((await call('GET', 'seller/invites', { cookie: S })).body.invites.some((x: any) => x.name === 'steve' && !x.code), 'seller sees open invites (without codes)');
+ok((await register('Alex', PW, inv.body.code)).body.error.key === 'err.codeInvalid', 'invite does not work for another name');
+const steve = await register('Steve', PW, inv.body.code);
+ok(steve.status === 200 && steve.body.confirmed === true, 'invite sign-up is confirmed immediately');
+ok((await register('Steve2', PW, inv.body.code)).status !== 200, 'invite works once');
+// An impostor grabs "Herobrine"; the real player gets an invite and takes the name back.
+const fake = await register('Herobrine', PW);
+const fakeId = (await call('GET', 'state', { cookie: fake.cookie })).body.me;
+const inv2 = await call('POST', 'seller/invite', { cookie: S, body: { name: 'Herobrine' } });
+ok(inv2.status === 200 && inv2.body.takesOver === true, 'invite for a name held by an unconfirmed account is allowed');
+const real = await register('Herobrine', 'echtes-passwort-99', inv2.body.code);
+ok(real.status === 200 && real.body.confirmed === true, 'real player takes the name back with the invite');
+ok((await call('GET', 'state', { cookie: fake.cookie })).body.me === null, 'impostor is signed out everywhere');
+ok((await login('Herobrine', PW)).body.error.key === 'err.loginFailed', 'impostor password no longer works');
+ok((await call('GET', 'state', { cookie: S })).body.db.accounts.find((x: any) => x.id === fakeId).disabledAt, 'impostor account is disabled, visible to the seller');
+// Seller releases a wrong claim manually.
+const fake2 = await register('Notch', PW);
+const fake2Id = (await call('GET', 'state', { cookie: fake2.cookie })).body.me;
+ok((await call('POST', 'seller/release', { cookie: S, body: { accountId: clientA } })).body.error.key === 'err.nameConfirmed', 'confirmed names cannot be released');
+ok((await call('POST', 'seller/release', { cookie: S, body: { accountId: fake2Id } })).status === 200, 'seller releases a wrong claim');
+ok((await register('Notch', PW)).status === 200, 'released name can be registered again');
 
 console.log('order lifecycle across the API');
 const oid = order.body.id;
@@ -228,11 +219,29 @@ const e1 = await call('GET', 'state', { cookie: A });
 const e2 = await call('GET', 'state', { cookie: A, headers: { 'if-none-match': e1.headers.get('etag')! } });
 ok(e2.status === 304, 'unchanged state answers 304');
 
+
+console.log('password reset and change');
+ok((await call('POST', 'seller/reset-code', { cookie: A, body: { accountId: clientA } })).status === 403, 'clients cannot create reset codes');
+const rc = await call('POST', 'seller/reset-code', { cookie: S, body: { accountId: clientA } });
+ok(rc.status === 200 && rc.body.name === 'Kiesel_Kai', 'seller creates a reset code');
+ok((await call('POST', 'auth/reset', { body: { name: 'Mo0nmoth', code: rc.body.code, password: 'neues-passwort-1' }, ip: freshIp() })).body.error.key === 'err.codeInvalid', 'reset code only works for its account');
+const reset = await call('POST', 'auth/reset', { body: { name: 'Kiesel_Kai', code: rc.body.code, password: 'neues-passwort-1' }, ip: freshIp() });
+ok(reset.status === 200 && !!reset.cookie, 'reset sets the new password and signs in');
+ok((await call('GET', 'state', { cookie: A })).body.me === null, 'old sessions end after a reset');
+ok((await call('POST', 'auth/reset', { body: { name: 'Kiesel_Kai', code: rc.body.code, password: 'noch-ein-passwort-2' }, ip: freshIp() })).status === 400, 'reset code works once');
+const A2 = reset.cookie!;
+ok((await call('POST', 'auth/password', { cookie: A2, body: { current: 'falsch-falsch-1', password: 'drittes-passwort-3' } })).body.error.key === 'err.pwCurrent', 'change needs the current password');
+ok((await call('POST', 'auth/password', { cookie: A2, body: { current: 'neues-passwort-1', password: 'drittes-passwort-3' } })).status === 200, 'password changed');
+ok((await login('Kiesel_Kai', 'drittes-passwort-3')).status === 200, 'new password works');
+const sellerReset = await call('POST', 'auth/reset', { body: { name: 'RealSeller', code: SETUP, password: 'seller-neu-12345' }, ip: freshIp() });
+ok(sellerReset.status === 200 && sellerReset.body.mfa === 'needed', 'seller can reset with the setup code, 2FA still required');
+const S5 = sellerReset.cookie!;
+ok((await call('POST', 'auth/totp', { cookie: S5, body: { recovery: conf.body.recovery[1] } })).status === 200, 'seller back in after 2FA');
+
 console.log('rate limits');
 let last = 0;
-let lastLoc = '';
-for (let i = 0; i < 17; i++) { const r = await call('GET', 'auth/microsoft', { ip: '10.9.9.9' }); last = r.status; lastLoc = r.headers.get('location') ?? r.body?.error?.key; }
-ok(last === 429 || /tooMany/.test(lastLoc), 'sign-in attempts limited per IP');
+for (let i = 0; i < 22; i++) last = (await call('POST', 'auth/login', { body: { name: `Spammer${i}`, password: 'x'.repeat(12) }, ip: '10.9.9.9' })).status;
+ok(last === 429, 'password attempts limited per IP');
 const rl = await sql.query<{ key: string }>('select key from rate_limits');
 ok(!rl.some((r) => r.key.includes('10.9.9.9')), 'IPs are not stored in clear');
 
@@ -243,12 +252,12 @@ ok((await call('POST', 'me/delete', { cookie: B, body: { confirm: 'wrong' } })).
 const del = await call('POST', 'me/delete', { cookie: B, body: { confirm: 'mo0nmoth' } });
 ok(del.status === 200, 'account deleted');
 ok((await call('GET', 'state', { cookie: B })).body.me === null, 'sessions ended after delete');
-const after = (await call('GET', 'state', { cookie: S })).body.db as DB;
+const after = (await call('GET', 'state', { cookie: S5 })).body.db as DB;
 ok(!after.accounts.some((x) => x.mcName === 'Mo0nmoth'), 'name gone from the data');
 
 console.log('logout');
-await call('POST', 'auth/logout', { cookie: A });
-ok((await call('GET', 'state', { cookie: A })).body.me === null, 'logout ends the session');
+await call('POST', 'auth/logout', { cookie: A2 });
+ok((await call('GET', 'state', { cookie: A2 })).body.me === null, 'logout ends the session');
 
 console.log('cron');
 ok((await call('GET', 'cron')).status === 401, 'cron needs the secret');

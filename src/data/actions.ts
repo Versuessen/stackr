@@ -2,7 +2,7 @@
 // returns a new DB, and throws ActionError (with an i18n key) when a rule forbids the change.
 // A future server would run these same functions, so the rules stay in one place.
 
-import type { CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types.js';
+import type { Account, CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types.js';
 import { cartTotals, unitOk } from '../domain/items.js';
 import {
   CONFIG, DAY, activeBlacklist, bulkLimit, checkCanOrder, clientStats, iso, nextLevelState, nowFrom, sellerStats,
@@ -92,30 +92,66 @@ export const signIn = (mcName: string, onId: (id: ID) => void): Mut => (db, now)
 };
 
 /**
- * Live sign-in after the verification server confirmed the Minecraft account.
- * Accounts are keyed by UUID, because names can change. The seller account is the one whose
- * UUID matches the server's SELLER_MC_UUID setting.
+ * Live accounts (name + password). The password itself lives in a separate server table,
+ * never in this document. `confirmed` is true when the player signed up with an invite code
+ * the seller handed out in-game for exactly this name.
  */
-export const signInVerified = (mcName: string, mcUuid: string, isSeller: boolean, onId: (id: ID) => void): Mut => (db, now) => {
-  if (!/^[A-Za-z0-9_]{3,16}$/.test(mcName) || !/^[0-9a-f]{32}$/.test(mcUuid)) throw new ActionError('err.badName');
-  let acc = db.accounts.find((a) => a.mcUuid === mcUuid && !a.deletedAt);
-  if (!acc && isSeller) acc = db.accounts.find((a) => a.sellerId);
-  if (!acc) {
-    acc = { id: uid('acc'), mcName, mcUuid, createdAt: iso(now), lastSeenAt: iso(now) };
-    db.accounts.push(acc);
-    db.tokens.push({ id: uid('tok'), ownerId: acc.id, type: 'priority', source: 'first_order', grantedAt: iso(now) });
-    notify(db, now, acc.id, 'notice.welcomeToken');
-  }
-  if (acc.sellerId && !isSeller) throw new ActionError('err.notAllowed');
+export const createAccount = (id: ID, mcName: string, mcUuid: string, confirmed: boolean): Mut => (db, now) => {
+  if (!/^[A-Za-z0-9_]{3,16}$/.test(mcName)) throw new ActionError('err.badName');
+  const taken = db.accounts.find((a) => !a.deletedAt && !a.disabledAt && a.mcName.toLowerCase() === mcName.toLowerCase());
+  if (taken) throw new ActionError('err.nameTaken');
+  if (db.accounts.some((a) => a.id === id)) throw new ActionError('err.unknown');
+  const acc: Account = { id, mcName, mcUuid, createdAt: iso(now), lastSeenAt: iso(now), nameConfirmedAt: confirmed ? iso(now) : undefined };
+  db.accounts.push(acc);
+  db.tokens.push({ id: uid('tok'), ownerId: acc.id, type: 'priority', source: 'first_order', grantedAt: iso(now) });
+  notify(db, now, acc.id, confirmed ? 'notice.welcomeToken' : 'notice.welcomeUnconfirmed');
+};
+
+/** First-time setup: the seller claims the seller account (with the secret setup code). */
+export const claimSellerAccount = (mcName: string, mcUuid: string): Mut => (db, now) => {
+  const acc = db.accounts.find((a) => a.sellerId);
+  if (!acc) throw new ActionError('err.notAllowed');
+  if (db.accounts.some((a) => a !== acc && !a.deletedAt && !a.disabledAt && a.mcName.toLowerCase() === mcName.toLowerCase())) throw new ActionError('err.nameTaken');
   acc.mcName = mcName;
   acc.mcUuid = mcUuid;
+  acc.nameConfirmedAt = iso(now);
   acc.lastSeenAt = iso(now);
-  if (acc.sellerId) {
-    const s = seller(db, acc.sellerId);
-    s.lastOnlineAt = iso(now);
-    if (s.displayName === 'DeinName') s.displayName = mcName;
+  const s = seller(db, acc.sellerId!);
+  s.displayName = mcName;
+  s.lastOnlineAt = iso(now);
+};
+
+export const touchLogin = (accountId: ID): Mut => (db, now) => {
+  const acc = db.accounts.find((a) => a.id === accountId);
+  if (!acc) return;
+  acc.lastSeenAt = iso(now);
+  if (acc.sellerId) seller(db, acc.sellerId).lastOnlineAt = iso(now);
+};
+
+/** Seller saw the player in-game: the name on this account really belongs to them. */
+export const confirmName = (actorId: ID, clientId: ID): Mut => (db, now) => {
+  if (!db.accounts.find((a) => a.id === actorId)?.sellerId) throw new ActionError('err.notAllowed');
+  const acc = db.accounts.find((a) => a.id === clientId && !a.deletedAt && !a.disabledAt);
+  if (!acc) throw new ActionError('err.accountMissing');
+  if (acc.nameConfirmedAt) return;
+  acc.nameConfirmedAt = iso(now);
+  notify(db, now, acc.id, 'notice.nameConfirmed');
+};
+
+/**
+ * Frees a Minecraft name that was claimed by the wrong person. The account can no longer sign in,
+ * its open orders are stopped without counting against anyone, and the name is available again.
+ */
+export const releaseName = (accountId: ID): Mut => (db, now) => {
+  const acc = db.accounts.find((a) => a.id === accountId && !a.deletedAt && !a.disabledAt);
+  if (!acc) throw new ActionError('err.accountMissing');
+  if (acc.sellerId) throw new ActionError('err.notAllowed');
+  if (acc.nameConfirmedAt) throw new ActionError('err.nameConfirmed');
+  acc.disabledAt = iso(now);
+  for (const o of db.orders.filter((x) => x.clientId === acc.id && OPEN_FOR_DELETE.includes(x.status))) {
+    setStatus(o, 'cancelled', 'system', now, 'released');
+    refundTokens(db, o);
   }
-  onId(acc.id);
 };
 
 const OPEN_FOR_DELETE: OrderStatus[] = ['received', 'cleared', 'processing', 'fulfilling', 'delivered'];
@@ -394,14 +430,10 @@ export const rate = (orderId: ID, actorId: ID, rating: Omit<Rating, 'at'>): Mut 
 // ---------- Seller settings and client management ----------
 
 export const updateSeller = (sellerId: ID, actorId: ID, patch: Partial<Pick<SellerProfile,
-  'displayName' | 'tagline' | 'accepting' | 'maxConcurrent' | 'weeklyCapacity' | 'blacklistPenaltyDays'>>): Mut => (db, now) => {
+  'displayName' | 'tagline' | 'accepting' | 'maxConcurrent' | 'weeklyCapacity' | 'blacklistPenaltyDays' | 'inviteOnly'>>): Mut => (db, now) => {
   const s = seller(db, sellerId);
   if (s.accountId !== actorId) throw new ActionError('err.notAllowed');
   Object.assign(s, patch);
-  if (patch.displayName) {
-    const acc = db.accounts.find((a) => a.id === actorId);
-    if (acc && /^[A-Za-z0-9_]{3,16}$/.test(patch.displayName)) acc.mcName = patch.displayName;
-  }
   s.lastOnlineAt = iso(now);
 };
 

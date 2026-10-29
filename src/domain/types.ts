@@ -14,6 +14,8 @@ export interface Account {
   lastSeenAt: ISODate;
   sellerId?: ID; // set when this account runs a seller profile
   deletedAt?: ISODate; // set when the person erased their account
+  nameConfirmedAt?: ISODate; // seller confirmed in-game that the name belongs to this person
+  disabledAt?: ISODate; // name released by the seller (claimed by the wrong person)
 }
 
 export interface SellerProfile {
@@ -28,6 +30,7 @@ export interface SellerProfile {
   weeklyCapacity: number; // orders per week, used for wait estimates
   blacklistPenaltyDays: number; // waiting time after a blacklist entry is cleared
   levelState: { level: SellerLevelId; graceUntil?: ISODate };
+  inviteOnly?: boolean; // live: sign-up only with an invite code
   createdAt: ISODate;
 }
 
