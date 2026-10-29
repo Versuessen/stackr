@@ -34,7 +34,7 @@ jobs:
             | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:BACKUP_PASSPHRASE -out "$f"
           test "$(stat -c %s "$f")" -gt 200
           echo "FILE=$f" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.cfg.outputs.skip != '1'
         with:
           name: ${{ env.FILE }}
