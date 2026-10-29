@@ -1,13 +1,6 @@
-// Minecraft sign-in.
-//
-// Planned for release: the "join a server, get a code" method. The player joins a small
-// verification server (separate from the SMP, so nothing is installed on the SMP itself);
-// Mojang's session check proves they own the account; the server kicks them with a 6-digit
-// code; they type the code here. The site only ever learns username + UUID, never a password
-// or email. Open-source implementation to self-host: https://github.com/Andcool-Systems/mc-oauth-rs
-//
-// Beta: the same screens, but the code is generated in the browser and shown on screen,
-// because during beta only the site owner uses the site.
+// Beta-only Minecraft sign-in simulation. The live site uses "Sign in with Microsoft"
+// (server/msAuth.ts): Microsoft OAuth → Xbox Live → Minecraft profile, the same chain the
+// official launcher uses. In beta the code is generated in the browser and shown on screen.
 
 export interface Challenge {
   mcName: string;

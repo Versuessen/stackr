@@ -1,6 +1,7 @@
 // Response helpers, cookies and request checks shared by all routes.
 
 export const SESSION_COOKIE = '__Host-stackr_sid';
+export const OAUTH_COOKIE = '__Host-stackr_oauth';
 
 const API_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',
@@ -25,7 +26,16 @@ export function sessionCookie(token: string, maxAgeSec: number) {
   // __Host- prefix: browser enforces Secure, Path=/ and no Domain, so subdomains cannot set or read it.
   return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSec}; Priority=High`;
 }
-export const clearCookie = () => `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+export const clearCookie = (name = SESSION_COOKIE) => `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+/** Short-lived cookie that carries the OAuth state + PKCE verifier (encrypted) to the callback. */
+export const oauthCookie = (value: string, maxAgeSec: number) => `${OAUTH_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSec}`;
+
+/** Browser redirect (sign-in flow). Never cached, never leaks the URL as a referrer. */
+export function redirect(location: string, cookies: string[] = []): Response {
+  const h = new Headers({ location, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' });
+  for (const c of cookies) h.append('set-cookie', c);
+  return new Response(null, { status: 302, headers: h });
+}
 
 export function readCookie(req: Request, name: string): string | null {
   const raw = req.headers.get('cookie');

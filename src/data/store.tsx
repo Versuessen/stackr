@@ -21,7 +21,7 @@ export type MfaState = 'needed' | 'enroll' | null;
 export interface LiveInfo {
   mfa: MfaState;
   pending: { mcName: string } | null;
-  auth: { joinHost: string | null; ready: boolean };
+  auth: { ready: boolean };
 }
 interface StatePayload extends LiveInfo { mode: 'live' | 'beta'; version: number; me: string | null; db: DB }
 
@@ -97,6 +97,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const etag = useRef<string | null>(null);
+  const showToastRef = useRef<(text: React.ReactNode) => void>(() => {});
+  const langRef = useRef(lang);
+  langRef.current = lang;
 
   const t = useMemo<TFn>(() => (key, vars) => translate(lang, key, vars), [lang]);
   const msg = useCallback((e: unknown) => {
@@ -112,6 +115,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setSessionId(p.me);
     setLive({ mfa: p.mfa, pending: p.pending, auth: p.auth });
   }, []);
+
+  // Back from "Sign in with Microsoft": greet once, then clean the address bar.
+  const welcomeBack = (p: StatePayload) => {
+    try {
+      const u = new URL(window.location.href);
+      if (!u.searchParams.has('signed_in')) return;
+      u.searchParams.delete('signed_in');
+      window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`);
+      const name = p.db.accounts.find((a) => a.id === p.me)?.mcName ?? p.pending?.mcName;
+      if (name && !p.mfa) window.setTimeout(() => showToastRef.current(translate(langRef.current, 'auth.welcome', { name })), 300);
+    } catch { /* ignore */ }
+  };
 
   const refresh = useCallback(async () => {
     if (modeRef.current !== 'live') return;
@@ -141,6 +156,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         clearBetaData();
         applyPayload(r.data);
         setMode('live');
+        welcomeBack(r.data);
       } else { window.clearTimeout(timer); toBeta(); }
     }, () => { window.clearTimeout(timer); toBeta(); });
     return () => window.clearTimeout(timer);
@@ -234,6 +250,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setToasts((ts) => [...ts.slice(-2), { id, text, action }]);
     timers.current.set(id, window.setTimeout(() => closeToast(id), 4000));
   }, [closeToast]);
+
+  showToastRef.current = showToast;
 
   const setCart = useCallback((c: CartEntry[]) => { cartRef.current = c; setCartState(c); cartStore.set(c); }, []);
   const addToCart = useCallback<StoreValue['addToCart']>((it, n, unit) => {

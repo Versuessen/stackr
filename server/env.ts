@@ -1,14 +1,23 @@
-// All configuration comes from environment variables (set in Vercel → Settings → Environment
-// Variables, never committed). If the required ones are missing, the API reports "beta" and the
-// site keeps running fully in the browser, so nothing half-configured ever goes live.
+// All configuration comes from environment variables (Vercel → Settings → Environment Variables,
+// never committed). Without DATABASE_URL and APP_SECRET the API reports "beta" and the site keeps
+// running in the browser, so nothing half-configured ever goes live.
+//
+//   DATABASE_URL         added by the Neon integration
+//   APP_SECRET           secret, ≥ 32 chars, root of all derived keys
+//   CRON_SECRET          secret, Vercel Cron sends it to /api/cron
+//   MS_CLIENT_ID         Azure app (client) id, not secret
+//   MS_CLIENT_SECRET     Azure client secret value
+//   SITE_URL             public origin, e.g. https://stackr-alpha.vercel.app (must match the
+//                        redirect URI registered in Azure + /api/auth/microsoft/callback)
+//   SELLER_MC_UUID       the seller's Minecraft UUID (with or without dashes)
 
 export interface Env {
   databaseUrl: string;
   appSecret: string;
-  sellerUuid: string; // Minecraft UUID of the seller, 32 hex chars without dashes
-  mcAuthUrl: string; // base URL of the mc-oauth API behind the reverse proxy
-  mcAuthKey: string; // shared secret the reverse proxy requires
-  mcJoinHost: string; // address players join to get their code, shown on the sign-in page
+  sellerUuid: string;
+  msClientId: string;
+  msClientSecret: string;
+  siteUrl: string;
   cronSecret: string;
   production: boolean;
 }
@@ -23,10 +32,14 @@ export function readEnv(src: Record<string, string | undefined> = process.env): 
     databaseUrl,
     appSecret,
     sellerUuid: clean(src.SELLER_MC_UUID).toLowerCase().replace(/-/g, ''),
-    mcAuthUrl: clean(src.MC_AUTH_URL).replace(/\/+$/, ''),
-    mcAuthKey: clean(src.MC_AUTH_KEY),
-    mcJoinHost: clean(src.MC_JOIN_HOST),
+    msClientId: clean(src.MS_CLIENT_ID),
+    msClientSecret: clean(src.MS_CLIENT_SECRET),
+    siteUrl: clean(src.SITE_URL).replace(/\/+$/, ''),
     cronSecret: clean(src.CRON_SECRET),
     production: src.VERCEL_ENV === 'production',
   };
 }
+
+/** Microsoft sign-in is usable only when the app is fully configured. */
+export const msReady = (env: Env) =>
+  !!(env.msClientId && env.msClientSecret && /^https:\/\/[^/]+$|^http:\/\/localhost(:\d+)?$/.test(env.siteUrl));

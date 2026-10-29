@@ -1,7 +1,8 @@
 // The whole API in one request handler (one serverless function = one cold start).
 //
 //   GET  /api/state               session + the data this person may see (ETag, 304 when unchanged)
-//   POST /api/auth/code           Minecraft sign-in with the code from the verification server
+//   GET  /api/auth/microsoft      start "Sign in with Microsoft" (redirects to Microsoft)
+//   GET  /api/auth/microsoft/callback  Microsoft → Xbox → Minecraft profile, then session cookie
 //   POST /api/auth/totp           seller second factor (authenticator code or recovery code)
 //   POST /api/auth/enroll/start   seller: first-time 2FA setup (secret + QR)
 //   POST /api/auth/enroll/confirm seller: confirm setup, receive recovery codes once
@@ -17,13 +18,14 @@ import { ZodError } from 'zod';
 import type { Account, DB } from '../src/domain/types.js';
 import { ActionError, deleteAccount, purgeOld, signInVerified } from '../src/data/actions.js';
 import { SELLER_COMMANDS, toMut, type Command } from '../src/data/commands.js';
-import { decrypt, encrypt, newTotpSecret, normRecovery, recoveryCodes, safeEqual, sha256, subKey, verifyTotp } from './crypto.js';
+import { createHash } from 'node:crypto';
+import { decrypt, encrypt, newTotpSecret, normRecovery, randomToken, recoveryCodes, safeEqual, sha256, subKey, verifyTotp } from './crypto.js';
 import { audit, migrate, type Sql } from './db.js';
-import type { Env } from './env.js';
-import { HttpError, checkWriteRequest, clearCookie, clientIp, json, readJson } from './http.js';
+import { msReady, type Env } from './env.js';
+import { HttpError, OAUTH_COOKIE, checkWriteRequest, clearCookie, clientIp, json, oauthCookie, readCookie, readJson, redirect } from './http.js';
 import { resolveLines } from './items.js';
-import { redeemCode } from './mcAuth.js';
-import { LIMITS, ipHash, limit } from './ratelimit.js';
+import { MsAuthError, authorizeUrl, minecraftIdentity, type MsFail } from './msAuth.js';
+import { LIMITS, hit, ipHash, limit } from './ratelimit.js';
 import { command as commandSchema, deleteConfirm, secondFactor, sixDigits } from './schemas.js';
 import { createSession, endAllSessions, endSession, getSession, markMfa, type Session } from './session.js';
 import { mutate, read } from './state.js';
@@ -98,32 +100,60 @@ async function getState(ctx: Ctx): Promise<Response> {
     me: viewer?.account.id ?? null,
     pending: pending ? { mcName: pending.mcName } : null,
     mfa,
-    auth: { joinHost: ctx.env.mcJoinHost || null, ready: !!(ctx.env.mcAuthUrl && ctx.env.mcAuthKey) },
+    auth: { ready: msReady(ctx.env) },
     db: viewFor(st.db, viewer),
   }, 200, { etag });
 }
 
-async function postCode(ctx: Ctx): Promise<Response> {
-  const { code } = sixDigits.parse(await readJson(ctx.req));
+const oauthKey = (env: Env) => subKey(env.appSecret, 'oauth-state');
+const NEXT_OK = /^[a-z]{2,12}(-[A-Za-z0-9-]{1,48})?$/;
+
+/** Step 1: remember state + PKCE verifier in an encrypted, HttpOnly cookie and send the browser to Microsoft. */
+async function getMsStart(ctx: Ctx): Promise<Response> {
+  if (!msReady(ctx.env)) return redirect('/?auth_error=unavailable#signin');
   await limit(ctx.sql, `login:${ctx.ip}`, ...LIMITS.loginIp);
-  await limit(ctx.sql, 'login:all', ...LIMITS.loginGlobal);
-  const who = await redeemCode(ctx.env, code);
-  if (!who) {
-    await audit(ctx.sql, 'login.fail', null, ctx.ip);
-    throw new HttpError(400, 'auth.wrongCode');
+  const next = new URL(ctx.req.url).searchParams.get('next') ?? '';
+  const state = randomToken(24);
+  const verifier = randomToken(48);
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const packed = encrypt(oauthKey(ctx.env), JSON.stringify({ s: state, v: verifier, n: NEXT_OK.test(next) ? next : '', e: Date.now() + 10 * 60_000 }));
+  return redirect(authorizeUrl(ctx.env, state, challenge), [oauthCookie(packed, 600)]);
+}
+
+/** Step 2: Microsoft sends the browser back here with ?code&state. */
+async function getMsCallback(ctx: Ctx): Promise<Response> {
+  const clear = clearCookie(OAUTH_COOKIE);
+  const fail = (reason: MsFail | 'tooMany') => redirect(`/?auth_error=${reason}#signin`, [clear]);
+  try {
+    const q = new URL(ctx.req.url).searchParams;
+    if (q.get('error')) return fail(q.get('error') === 'access_denied' ? 'cancelled' : 'unavailable');
+    let saved: { s: string; v: string; n: string; e: number } | null = null;
+    try { saved = JSON.parse(decrypt(oauthKey(ctx.env), readCookie(ctx.req, OAUTH_COOKIE) ?? '')); } catch { saved = null; }
+    const state = q.get('state') ?? '';
+    const code = q.get('code') ?? '';
+    if (!saved || saved.e < Date.now() || !state || !safeEqual(state, saved.s) || !code || code.length > 2048) return fail('expired');
+    // Each state works exactly once, even if someone captured the cookie.
+    if (!(await hit(ctx.sql, `oauth-state:${sha256(saved.s)}`, 1, 900))) return fail('expired');
+    await limit(ctx.sql, 'login:all', ...LIMITS.loginGlobal);
+
+    const who = await minecraftIdentity(ctx.env, code, saved.v);
+    const isSeller = !!ctx.env.sellerUuid && who.uuid === ctx.env.sellerUuid;
+    let id = '';
+    await mutate(ctx.sql, signInVerified(who.name, who.uuid, isSeller, (x) => { id = x; }));
+    if (ctx.session) await endSession(ctx.sql, ctx.session.idHash); // fresh session id on every login
+    const cookie = await createSession(ctx.sql, id, isSeller);
+    await audit(ctx.sql, isSeller ? 'login.seller' : 'login', id, ctx.ip);
+    const dest = isSeller ? 'signin' : saved.n || 'home';
+    return redirect(`/?signed_in=1#${dest}`, [cookie, clear]);
+  } catch (e) {
+    if (e instanceof MsAuthError) {
+      await audit(ctx.sql, `login.fail.${e.reason}`, null, ctx.ip);
+      return fail(e.reason);
+    }
+    if (e instanceof HttpError && e.status === 429) return fail('tooMany');
+    if (e instanceof ActionError) return fail('unavailable');
+    throw e;
   }
-  const isSeller = !!ctx.env.sellerUuid && who.uuid === ctx.env.sellerUuid;
-  let id = '';
-  await mutate(ctx.sql, signInVerified(who.name, who.uuid, isSeller, (x) => { id = x; }));
-  if (ctx.session) await endSession(ctx.sql, ctx.session.idHash); // new session id on every login
-  const cookie = await createSession(ctx.sql, id, isSeller);
-  await audit(ctx.sql, isSeller ? 'login.seller' : 'login', id, ctx.ip);
-  let mfa: MfaState = null;
-  if (isSeller) {
-    const rows = await ctx.sql.query('select 1 from seller_mfa where account_id = $1 and enrolled_at is not null', [id]);
-    mfa = rows.length ? 'needed' : 'enroll';
-  }
-  return json({ ok: true, mfa, mcName: who.name }, 200, {}, [cookie]);
 }
 
 async function postTotp(ctx: Ctx): Promise<Response> {
@@ -288,7 +318,8 @@ export function createHandler(env: Env | null, sql: Sql | null) {
       const key = `${method} ${path}`;
       switch (key) {
         case 'GET state': return await getState(ctx);
-        case 'POST auth/code': return await postCode(ctx);
+        case 'GET auth/microsoft': return await getMsStart(ctx);
+        case 'GET auth/microsoft/callback': return await getMsCallback(ctx);
         case 'POST auth/totp': return await postTotp(ctx);
         case 'POST auth/enroll/start': return await postEnrollStart(ctx);
         case 'POST auth/enroll/confirm': return await postEnrollConfirm(ctx);

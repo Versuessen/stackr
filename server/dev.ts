@@ -1,6 +1,7 @@
 // Local full-stack development only (never deployed): the real API handler on :3001 with an
-// in-process Postgres and a fake verification server. `npm run dev:api`, then `npm run dev`.
-// Get a sign-in code: GET http://localhost:3002/issue?name=Steve&uuid=<32 hex>
+// in-process Postgres. The Microsoft → Xbox → Minecraft calls are faked: an authorization code
+// of the form "dev.<Name>.<32-hex-uuid>" signs in as that player. In a browser test, intercept
+// login.microsoftonline.com/…/authorize and redirect to /api/auth/microsoft/callback?code=…&state=…
 import { PGlite } from '@electric-sql/pglite';
 import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -8,28 +9,27 @@ import { createHandler } from './routes.js';
 import { readEnv } from './env.js';
 import type { Sql } from './db.js';
 
-const codes = new Map<string, { nickname: string; UUID: string }>();
-const KEY = randomBytes(16).toString('hex');
-createServer((req, res) => {
-  const url = new URL(req.url || '/', 'http://x');
-  if (url.pathname === '/issue') {
-    const code = String(100000 + Math.floor(Math.random() * 899999));
-    codes.set(code, { nickname: url.searchParams.get('name') || 'Steve', UUID: url.searchParams.get('uuid') || randomBytes(16).toString('hex') });
-    res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }).end(JSON.stringify({ code }));
-    return;
+const realFetch = globalThis.fetch;
+const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = String(input instanceof Request ? input.url : input);
+  const body = typeof init?.body === 'string' ? init.body : init?.body?.toString() ?? '';
+  if (url.includes('login.microsoftonline.com')) return reply({ access_token: `fake-ms.${new URLSearchParams(body).get('code')}` });
+  if (url.includes('user.auth.xboxlive.com')) return reply({ Token: `fake-xb.${JSON.parse(body).Properties.RpsTicket.slice(10)}`, DisplayClaims: { xui: [{ uhs: 'dev' }] } });
+  if (url.includes('xsts.auth.xboxlive.com')) return reply({ Token: `fake-xs.${JSON.parse(body).Properties.UserTokens[0].slice(8)}`, DisplayClaims: { xui: [{ uhs: 'dev' }] } });
+  if (url.includes('login_with_xbox')) return reply({ access_token: `fake-mc.${JSON.parse(body).identityToken.split(';fake-xs.')[1]}` });
+  if (url.includes('minecraft/profile')) {
+    const [, name, id] = String((init?.headers as Record<string, string>).authorization).replace('Bearer fake-mc.', '').split('.');
+    return reply({ id, name });
   }
-  const m = /^\/code\/(\d{6})$/.exec(url.pathname);
-  const hit = m && req.headers['x-stackr-key'] === KEY && codes.get(m[1]);
-  if (!hit) { res.writeHead(404).end(); return; }
-  codes.delete(m![1]);
-  res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ...hit, properties: [] }));
-}).listen(3002);
+  return realFetch(input, init);
+}) as typeof fetch;
 
 const pg = new PGlite(process.env.PGLITE_DIR || undefined);
 const sql: Sql = { query: async (t, p = []) => (await pg.query(t, p as never[])).rows as never };
 const env = readEnv({
   DATABASE_URL: 'pglite', APP_SECRET: randomBytes(32).toString('hex'), SELLER_MC_UUID: process.env.SELLER_MC_UUID || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  MC_AUTH_URL: 'http://127.0.0.1:3002', MC_AUTH_KEY: KEY, MC_JOIN_HOST: 'auth.localhost', CRON_SECRET: 'dev',
+  MS_CLIENT_ID: 'dev-client', MS_CLIENT_SECRET: 'dev-secret', SITE_URL: 'http://localhost:4173', CRON_SECRET: 'dev',
 });
 const handle = createHandler(env, sql);
 
@@ -51,4 +51,4 @@ createServer(async (req, res) => {
   const cookies = r.headers.getSetCookie();
   if (cookies.length) out['set-cookie'] = cookies;
   res.writeHead(r.status, out).end(Buffer.from(await r.arrayBuffer()));
-}).listen(3001, () => console.log('API on :3001, fake verification server on :3002'));
+}).listen(3001, () => console.log('API on :3001 (Microsoft sign-in faked)'));

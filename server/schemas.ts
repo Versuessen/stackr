@@ -92,9 +92,3 @@ export const secondFactor = z.union([
   z.object({ recovery: z.string().min(10).max(20) }),
 ]);
 export const deleteConfirm = z.object({ confirm: z.string().max(32) });
-
-// What the verification server (mc-oauth-rs) answers for a valid code.
-export const mcOauthResponse = z.object({
-  nickname: z.string().regex(/^[A-Za-z0-9_]{3,16}$/),
-  UUID: z.string().transform((s) => s.toLowerCase().replace(/-/g, '')).pipe(z.string().regex(/^[0-9a-f]{32}$/)),
-});

@@ -41,49 +41,49 @@ function afterSignIn(go: ReturnType<typeof useRouter>['go'], cartItems: number, 
   else go(cartItems ? { page: 'items' } : { page: 'home' }, cartItems ? 'cart' : undefined);
 }
 
-function LiveSignIn() {
-  const { t, live, refresh, showToast, cart } = useStore();
-  const { go } = useRouter();
-  const [code, setCode] = useState('');
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const host = live?.auth.joinHost;
-  const ready = !!live?.auth.ready && !!host;
+/** Reads ?auth_error=… once (set by the sign-in callback) and removes it from the address bar. */
+function takeAuthError(): string | null {
+  try {
+    const u = new URL(window.location.href);
+    const e = u.searchParams.get('auth_error');
+    if (!e) return null;
+    u.searchParams.delete('auth_error');
+    window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`);
+    return /^[A-Za-z]{2,20}$/.test(e) ? e : 'unavailable';
+  } catch { return null; }
+}
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const digits = code.replace(/\D/g, '');
-    if (digits.length !== 6) { setErr(t('auth.sixDigits')); return; }
-    setBusy(true); setErr(null);
-    try {
-      const r = await apiPost<{ mfa: string | null; mcName: string }>('auth/code', { code: digits });
-      await refresh();
-      if (!r.mfa) { showToast(t('auth.welcome', { name: r.mcName })); afterSignIn(go, cart.length, false); }
-    } catch (e2) { setErr(errText(t, e2)); } finally { setBusy(false); }
-  };
-  const copy = () => { if (host) void navigator.clipboard?.writeText(host).then(() => showToast(t('auth.copied')), () => {}); };
+function LiveSignIn() {
+  const { t, live, cart } = useStore();
+  const [err] = useState(takeAuthError);
+  const [busy, setBusy] = useState(false);
+  const ready = !!live?.auth.ready;
+  const next = cart.length ? 'items' : 'home';
 
   return (
     <div className="wrap shop narrow">
-      <PageHead title={t('auth.title')} lead={t('auth.lead')} />
+      <PageHead title={t('auth.title')} lead={t('auth.leadMs')} />
       <div className="auth-grid">
-        <div className="card auth-card">
+        <div className="card auth-card stack">
+          {err && (
+            <div className="notice bad" role="alert">
+              <b>{t(`auth.err.${err}.h`)}</b>
+              <p className="t-small" style={{ margin: '4px 0 0' }}>{t(`auth.err.${err}.b`)}</p>
+            </div>
+          )}
           {!ready ? (
             <div className="notice warn"><b>{t('auth.offlineTitle')}</b><p className="t-small" style={{ margin: '4px 0 0' }}>{t('auth.offlineBody')}</p></div>
           ) : (
-            <form className="stack" onSubmit={submit} noValidate>
+            <>
               <ol className="steps-list">
-                <li>{t('auth.step1')} <span className="mono join-host">{host}</span> <button type="button" className="btn btn-ghost btn-sm" onClick={copy}>{t('auth.copy')}</button>
-                  <span className="t-small ink2" style={{ display: 'block' }}>{t('auth.step1Hint')}</span></li>
-                <li>{t('auth.step2')}</li>
-                <li>{t('auth.step3')}</li>
+                <li>{t('auth.ms1')}</li>
+                <li>{t('auth.ms2')}</li>
+                <li>{t('auth.ms3')}</li>
               </ol>
-              <Field label={t('auth.code')} htmlFor="a-code" hint={t('auth.codeHint')} error={err}>
-                <input className="field num code-input" id="a-code" inputMode="numeric" autoComplete="one-time-code" value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/[^\d\s-]/g, ''))} maxLength={8} aria-invalid={!!err} />
-              </Field>
-              <button type="submit" className="btn btn-primary btn-lg" disabled={busy} aria-busy={busy}>{t('auth.verify')} <Glyph name="arrow" size={14} /></button>
-            </form>
+              <a className="btn btn-primary btn-lg btn-block" href={`/api/auth/microsoft?next=${next}`} aria-busy={busy}
+                onClick={() => setBusy(true)}>{busy ? t('auth.msBusy') : t('auth.msButton')} <Glyph name="arrow" size={14} /></a>
+              <p className="t-small ink2" style={{ margin: 0 }}>{t('auth.msNote')}</p>
+            </>
           )}
         </div>
         <AuthAside />
