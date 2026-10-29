@@ -3,6 +3,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
+  "regions": ["fra1"],
   "functions": {
     "api/index.ts": { "includeFiles": "public/items-26.3.json", "maxDuration": 15 }
   },
