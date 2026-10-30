@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="600" viewBox="0 0 1440 600" role="img" aria-labelledby="t d">
+  <title id="t">Screenshot placeholder</title>
+  <desc id="d">Stackr is a work in progress. Screenshots follow with the first release.</desc>
+  <defs>
+    <pattern id="s" width="36" height="36" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="18" height="36" fill="#c3f53c"/><rect x="18" width="18" height="36" fill="#d4fa6a"/>
+    </pattern>
+  </defs>
+  <rect width="1440" height="600" fill="url(#s)"/>
+  <rect x="300" y="190" width="840" height="220" rx="16" fill="#16141b"/>
+  <rect x="292" y="182" width="840" height="220" rx="16" fill="#ffffff" stroke="#16141b" stroke-width="4"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16141b" text-anchor="middle">
+    <text x="712" y="262" font-size="40" font-weight="700">Stackr · work in progress</text>
+    <text x="712" y="318" font-size="24">Screenshots folgen mit dem ersten Release.</text>
+    <text x="712" y="356" font-size="24">Screenshots follow with the first release.</text>
+  </g>
+</svg>

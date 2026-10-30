@@ -317,7 +317,7 @@ export function TermsPage() {
 }
 
 const PRIVACY_SECTIONS = ['who', 'what', 'why', 'see', 'cookies', 'keep', 'processors', 'rights', 'security'] as const;
-export const PRIVACY_UPDATED = '2026-10-29';
+export const PRIVACY_UPDATED = '2026-10-30';
 
 export function PrivacyPage() {
   const { t, db, lang } = useStore();

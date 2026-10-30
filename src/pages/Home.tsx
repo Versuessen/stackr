@@ -78,7 +78,7 @@ function Facts() {
     <ul className="facts card plain wrap-inner">
       <li><span className="d-s num">{fmtN(items.length || 1537, lang)}</span><span className="t-small mute">{t('home.factItems')}</span></li>
       <li><span className="d-s num">{farms}</span><span className="t-small mute">{t('home.factFarms')}</span></li>
-      <li><span className="d-s num">~{s ? publicWaitDays(db, s) : 2} {t('common.days')}</span><span className="t-small mute">{t('home.factWait')}</span></li>
+      <li><span className="d-s num">~{t('common.nDays', { n: s ? publicWaitDays(db, s) : 2 })}</span><span className="t-small mute">{t('home.factWait')}</span></li>
       <li><span className="d-s">{t('home.factPayTitle')}</span><span className="t-small mute">{t('home.factPay')}</span></li>
     </ul>
   );
@@ -168,7 +168,7 @@ function Services() {
                 <span className="gig-body">
                   <span className="t-title gig-title">{svc.name[lang]}</span>
                   <span className="t-small ink2">{svc.description[lang]}</span>
-                  <span className="gig-meta"><span className="badge b-line">{t('home.tierRange')}</span><span className="t-small mute">~{FARM_DAYS[key] ?? 3} {t('common.days')}</span></span>
+                  <span className="gig-meta"><span className="badge b-line">{t('home.tierRange')}</span><span className="t-small mute">~{t('common.nDays', { n: FARM_DAYS[key] ?? 3 })}</span></span>
                 </span>
               </Link>
             </li>

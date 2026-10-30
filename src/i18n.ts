@@ -25,6 +25,7 @@ const D: Dict = {
   'common.back': ['Zurück', 'Back'],
   'common.save': ['Speichern', 'Save'],
   'common.close': ['Schließen', 'Close'],
+  'common.nDays': ['{n} Tage', '{n} days'],
   'common.saved': ['Gespeichert', 'Saved'],
 
   'time.inDays': ['in {n} Tagen', 'in {n} days'],
@@ -408,6 +409,7 @@ const D: Dict = {
   'common.undo': ['Rückgängig', 'Undo'],
   'common.closeNotice': ['Hinweis schließen', 'Close notice'],
   'common.days': ['Tage', 'days'],
+  'common.day': ['Tag', 'day'],
   'common.on': ['An', 'On'],
   'common.off': ['Aus', 'Off'],
   'common.yes': ['Ja', 'Yes'],
@@ -852,7 +854,7 @@ const D: Dict = {
   'privacy.keep.h': ['Wie lange', 'How long'],
   'privacy.keep.b': ['• Konto: bis du es löschst.\n• Freitext, Koordinaten und Chat abgeschlossener Aufträge: {days} Tage nach dem letzten Schritt, danach bleibt nur eine anonyme Statistik.\n• Benachrichtigungen: 180 Tage.\n• Sitzungen: höchstens 30 Tage, nach 14 Tagen ohne Besuch früher (Anbieter: 12 Stunden).\n• Anmelde-Limits: 1 Tag. Sicherheitsprotokoll: 90 Tage.\n• Verschlüsselte Backups: 30 Tage.', '• Account: until you delete it.\n• Free text, coordinates and chat of finished orders: {days} days after the last step, then only anonymous statistics remain.\n• Notifications: 180 days.\n• Sessions: at most 30 days, sooner after 14 days without a visit (seller: 12 hours).\n• Sign-in limits: 1 day. Security log: 90 days.\n• Encrypted backups: 30 days.'],
   'privacy.processors.h': ['Dienstleister', 'Service providers'],
-  'privacy.processors.b': ['• Vercel Inc. (Hosting der Seite; USA, abgesichert über das EU-US Data Privacy Framework und Standardvertragsklauseln; Server-Funktionen laufen in Frankfurt).\n• Neon (Datenbank, Rechenzentrum in der EU).\n• GitHub (nur verschlüsselte Backups, die ohne den Schlüssel nicht lesbar sind).\n• Mojang/Microsoft (nur die öffentliche Namenssuche beim Erstellen eines Kontos).', '• Vercel Inc. (site hosting; USA, covered by the EU-US Data Privacy Framework and standard contractual clauses; server functions run in Frankfurt).\n• Neon (database, data centre in the EU).\n• GitHub (encrypted backups only, unreadable without the key).\n• Mojang/Microsoft (only the public name lookup when an account is created).'],
+  'privacy.processors.b': ['• Vercel Inc. (Hosting der Seite; USA, abgesichert über das EU-US Data Privacy Framework und Standardvertragsklauseln; Server-Funktionen laufen in Frankfurt).\n• Neon (Datenbank, Rechenzentrum in Frankfurt am Main).\n• GitHub (nur verschlüsselte Backups, die ohne den Schlüssel nicht lesbar sind).\n• Mojang/Microsoft (nur die öffentliche Namenssuche beim Erstellen eines Kontos).', '• Vercel Inc. (site hosting; USA, covered by the EU-US Data Privacy Framework and standard contractual clauses; server functions run in Frankfurt).\n• Neon (database, data centre in Frankfurt, Germany).\n• GitHub (encrypted backups only, unreadable without the key).\n• Mojang/Microsoft (only the public name lookup when an account is created).'],
   'privacy.rights.h': ['Deine Rechte', 'Your rights'],
   'privacy.rights.b': ['Du kannst jederzeit Auskunft verlangen und deine Daten herunterladen, sie berichtigen oder löschen lassen, die Verarbeitung einschränken lassen oder widersprechen. Herunterladen und Löschen gehen direkt unter „Meine Daten“. Du hast außerdem das Recht, dich bei einer Datenschutz-Aufsichtsbehörde zu beschweren.', 'You can ask at any time what is stored and download it, have it corrected or erased, restrict processing or object to it. Download and delete work directly under “My data”. You also have the right to complain to a data protection authority.'],
   'privacy.security.h': ['Sicherheit', 'Security'],
@@ -928,6 +930,12 @@ const D: Dict = {
   'wip.body': ['Diese Seite ist eine Beta. Bestellungen werden noch nicht wirklich verschickt und Daten liegen nur in deinem Browser. Dinge können sich jederzeit ändern.', 'This site is a beta. Orders aren’t really sent yet and data is stored only in your browser. Things can change at any time.'],
 };
 
+// Day counts are written in the plural; fix the singular when the number is exactly 1
+// ("1 Tage" → "1 Tag", "in 1 Tagen" → "in 1 Tag", "1 days" → "1 day").
+function singularDays(s: string): string {
+  return s.replace(/(^|[^\d.,])1 Tagen?(?![\wäöü-])/g, '$11 Tag').replace(/(^|[^\d.,])1 days\b/g, '$11 day');
+}
+
 export function translate(lang: Lang, key: string, vars?: Record<string, string | number>): string {
   const entry = D[key];
   if (!entry) {
@@ -935,7 +943,10 @@ export function translate(lang: Lang, key: string, vars?: Record<string, string 
     return key;
   }
   let s = entry[lang === 'de' ? 0 : 1];
-  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+    s = singularDays(s);
+  }
   return s;
 }
 

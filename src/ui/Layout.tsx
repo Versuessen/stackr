@@ -129,6 +129,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { t, lang, setLang, me, mySeller, db, toasts, closeToast, cart, cartBump, mode } = useStore();
   const { route } = useRouter();
   const status = useShopStatus();
+  // Sticky side panels (cart, order summary) sit just below the sticky header; measure it so
+  // they stay clear of it at every width and when the header wraps.
+  const topRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = topRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', `${Math.round(el.getBoundingClientRect().height)}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const unread = me ? db.notices.filter((n) => n.accountId === me.id && !n.read).length : 0;
   const newOrders = mySeller ? db.orders.filter((o) => o.sellerId === mySeller.id && o.status === 'received').length : 0;
   const [bump, setBump] = useState(false);
@@ -138,7 +148,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="app">
       <a className="skip" href="#main">{t('nav.skip')}</a>
-      <div className="topbar">
+      <div className="topbar" ref={topRef}>
       <div className="wip" role="region" aria-label={t('wip.label')}>
         <div className="wrap wip-in">
           <div className="wip-card">
@@ -157,7 +167,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <span className={`status ${status.away ? 'away' : ''}`}><i aria-hidden="true" />{status.text}</span>
           <ThemeButton />
           <nav className="hnav" aria-label={t('nav.account.label')}>
-            {me && <Link to={{ page: 'orders' }} className="hl" aria-current={cur('orders')}><Glyph name="list" /><span className="hl-text">{t('nav.myOrders')}</span></Link>}
+            {me && <Link to={{ page: 'orders' }} className="hl" aria-current={cur('orders')} aria-label={t('nav.myOrders')}><Glyph name="list" /><span className="hl-text">{t('nav.myOrders')}</span></Link>}
             {me && (
               <Link to={{ page: 'notices' }} className="hl" aria-current={cur('notices')} aria-label={t('nav.noticesN', { n: unread })}>
                 <Glyph name="bell" /><span className="hl-text">{t('nav.notices')}</span>{unread > 0 && <span className="pip num">{unread}</span>}

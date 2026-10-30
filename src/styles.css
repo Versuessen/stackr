@@ -48,7 +48,7 @@ img, svg { display: block; }
   --e1: 0 1px 2px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }
-.theme-btn { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-ctl); border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; padding: 0; transition: background-color var(--t-fast) var(--ease-out); }
+.theme-btn { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-ctl); border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; padding: 0; transition: background-color var(--t-fast) var(--ease-out); }
 .theme-btn:hover { background: var(--canvas); }
 
 /* ---------- type ---------- */
@@ -245,9 +245,20 @@ button.switch { width: 100%; border: 0; background: transparent; font: inherit; 
 .giant { font-family: var(--px); font-size: clamp(96px, 23vw, 330px); line-height: .78; letter-spacing: -.02em; color: var(--lapis); white-space: nowrap; margin: 0 0 -.1em; padding: 0 12px; user-select: none; }
 
 /* ---------- responsive ---------- */
+/* Signed in, the header holds orders, notices, cart and account: drop the first two labels early. */
+@media (max-width: 1400px) {
+  .hnav a.hl .hl-text { display: none; }
+}
 @media (max-width: 1100px) {
   .hnav .hl-text { display: none; }
   .hdr-row { gap: 12px; }
+}
+/* Tablets: search moves to its own row before the header runs out of room. */
+@media (max-width: 960px) {
+  .hdr-row { flex-wrap: wrap; min-height: 0; padding-top: 10px; padding-bottom: 10px; row-gap: 10px; }
+  .srch { order: 3; flex-basis: 100%; max-width: none; }
+  .hdr .status { display: none; }
+  .subnav { overflow-x: auto; scrollbar-width: none; }
 }
 @media (max-width: 768px) {
   .wrap { padding: 0 16px; }
@@ -828,3 +839,6 @@ a.notice-item:hover { border-color: var(--ink); }
 .inv-list li { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .inv-list li .mc { font-weight: 600; }
 .inv-list li .btn { margin-left: auto; }
+
+/* Long Minecraft names must not push the header wider than the screen. */
+.acct > summary .hl-text { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }

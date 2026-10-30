@@ -68,7 +68,7 @@ export function BackstagePage() {
       <dl className="stats">
         <div className="card"><dt className="t-label mute">{t('bs.needsReply')}</dt><dd className="d-l num">{reply.length}</dd><dd className="t-small mute">{reply.length ? t('bs.oldest', { rel: relDays(reply[0].createdAt, now, t) }) : t('bs.nothingWaiting')}</dd></div>
         <div className={`card ${inWork > s.maxConcurrent ? 'over' : ''}`}><dt className="t-label mute">{t('bs.inWork')}</dt><dd className="d-l num">{inWork}<span className="unit"> / {s.maxConcurrent}</span></dd><dd className="t-small mute">{t('bs.thisWeekN', { n: doneThisWeek, max: s.weeklyCapacity })}</dd></div>
-        <div className="card"><dt className="t-label mute">{t('bs.wait')}</dt><dd className="d-l num">~{publicWaitDays(db, s)}<span className="unit"> {t('common.days')}</span></dd><dd className="t-small mute">{t('bs.waitNote')}</dd></div>
+        <div className="card"><dt className="t-label mute">{t('bs.wait')}</dt><dd className="d-l num">~{publicWaitDays(db, s)}<span className="unit"> {t(publicWaitDays(db, s) === 1 ? 'common.day' : 'common.days')}</span></dd><dd className="t-small mute">{t('bs.waitNote')}</dd></div>
         <div className="card"><dt className="t-label mute">{t('bs.level')}</dt><dd className="d-l num">{fmtN(st.points, lang)}</dd><dd className="t-small mute">{t(`level.seller.${s.levelState.level}`)}</dd></div>
       </dl>
       {s.levelState.graceUntil && <p className="notice warn" style={{ marginTop: 16 }}>{t('bs.grace', { date: fmtDate(s.levelState.graceUntil, lang, false) })}</p>}
