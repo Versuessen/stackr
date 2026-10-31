@@ -66,10 +66,24 @@ interface StoreValue {
 const Ctx = createContext<StoreValue | null>(null);
 const localRepo = new LocalRepository();
 
+/**
+ * First visit: the first of the browser's preferred languages that is German or English, then the
+ * operating system's locale; anything else (Spanish, Polish, …) gets English.
+ */
+export function detectLang(prefs: readonly string[], systemLocale?: string): Lang {
+  for (const l of [...prefs, systemLocale ?? '']) {
+    const code = l.toLowerCase().slice(0, 2);
+    if (code === 'de' || code === 'en') return code;
+  }
+  return 'en';
+}
 function initialLang(): Lang {
   const saved = langPref.get();
   if (saved === 'de' || saved === 'en') return saved;
-  return typeof navigator !== 'undefined' && navigator.language?.startsWith('en') ? 'en' : 'de';
+  if (typeof navigator === 'undefined') return 'en';
+  let system: string | undefined;
+  try { system = Intl.DateTimeFormat().resolvedOptions().locale; } catch { system = undefined; }
+  return detectLang(navigator.languages?.length ? navigator.languages : [navigator.language ?? ''], system);
 }
 function initialTheme(): Theme {
   const saved = themePref.get();

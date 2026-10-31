@@ -3,6 +3,7 @@
 
 import type { Account, DB, Localized, Order, SellerProfile, Service, ServiceExtra } from './types.js';
 import { DAY, iso } from './rules.js';
+import { FARMS } from './farms.js';
 
 export const SCHEMA_VERSION = 2;
 
@@ -14,31 +15,49 @@ const FARM_TIERS = [
   { tier: 3 as const, label: L('Hochleistung', 'High output') },
 ];
 const FARM_EXTRAS: ServiceExtra[] = [
-  { id: 'storage', name: L('Größeres Lager', 'Larger storage') },
+  { id: 'storage', name: L('Größeres Lager (+5 Doppelkisten)', 'Larger storage (+5 double chests)') },
   { id: 'sorting', name: L('Item-Sortierung', 'Item sorting') },
 ];
 
 function services(sellerId: string): Service[] {
-  const mat = (id: string, name: Localized, description: Localized, unitHint: Localized): Service => ({
-    id: `${sellerId}-${id}`, sellerId, kind: 'material', name, description, unitHint, active: true,
-  });
-  const farm = (id: string, name: Localized, description: Localized): Service => ({
-    id: `${sellerId}-${id}`, sellerId, kind: 'farm', name, description, tiers: FARM_TIERS, extras: FARM_EXTRAS, active: true,
-  });
   return [
-    mat('items', L('Material-Lieferung', 'Material delivery'), L('Alles aus der Item-Liste von Minecraft 26.3, als ein Auftrag aus dem Warenkorb.', 'Anything from the Minecraft 26.3 item list, as one order from the cart.'), L('Stück', 'pieces')),
-    farm('iron', L('Eisenfarm', 'Iron farm'), L('Golem-Farm mit Dorfbewohnern.', 'Golem farm with villagers.')),
-    farm('raid', L('Raidfarm', 'Raid farm'), L('Totems, Smaragde und mehr.', 'Totems, emeralds and more.')),
-    farm('wool', L('Wollfarm', 'Wool farm'), L('Schafe und Scheren, auf Wunsch alle Farben.', 'Sheep and shears, all colours on request.')),
-    farm('stone', L('Stein-/Bruchsteingenerator', 'Stone / cobblestone generator'), L('Für Baumaterial in Mengen.', 'Building material in bulk.')),
-    farm('tree', L('Baumfarm', 'Tree farm'), L('Holz nach Wahl der Baumart.', 'Logs from the tree type of your choice.')),
-    farm('gold', L('Goldfarm', 'Gold farm'), L('Piglin-Farm auf dem Netherdach.', 'Piglin farm on the nether roof.')),
+    {
+      id: `${sellerId}-items`, sellerId, kind: 'material', active: true,
+      name: L('Material-Lieferung', 'Material delivery'),
+      description: L('Alles aus der Item-Liste von Minecraft 26.3, als ein Auftrag aus dem Warenkorb.', 'Anything from the Minecraft 26.3 item list, as one order from the cart.'),
+      unitHint: L('Stück', 'pieces'),
+    },
+    ...FARMS.map((f): Service => ({
+      id: `${sellerId}-${f.key}`, sellerId, kind: 'farm', name: f.name, description: f.description,
+      tiers: FARM_TIERS, extras: FARM_EXTRAS, active: true,
+    })),
     {
       id: `${sellerId}-custom`, sellerId, kind: 'custom', active: true,
       name: L('Eigener Auftrag', 'Custom request'),
       description: L('Etwas, das hier nicht steht? Beschreib es.', 'Something not listed? Describe it.'),
     },
   ];
+}
+
+/**
+ * Brings a stored shop up to the current catalogue: new farms are added, names, descriptions,
+ * tiers and extras follow the code. What the seller switched on or off stays as it is.
+ */
+export function syncCatalog(db: DB): DB {
+  db.points ??= [];
+  db.events ??= [];
+  db.subscriptions ??= [];
+  for (const s of db.sellers) {
+    const want = services(s.id);
+    const order = new Map(want.map((w, i) => [w.id, i]));
+    for (const w of want) {
+      const have = db.services.find((x) => x.id === w.id);
+      if (!have) db.services.push(w);
+      else Object.assign(have, { name: w.name, description: w.description, tiers: w.tiers, extras: w.extras, unitHint: w.unitHint });
+    }
+    db.services.sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+  }
+  return db;
 }
 
 /** A fresh database: one seller (you) and nothing else. */

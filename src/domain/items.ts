@@ -2,12 +2,13 @@
 // plus the search and the unit maths the shop runs on. Pure functions, no React.
 
 import type { ItemUnit, OrderLine } from './types.js';
+import { dimensionsOf, groupsOf, type Dimension, type ItemGroup } from './groups.js';
 
 export type ItemCat = 'blocks' | 'materials' | 'tools' | 'armor' | 'food' | 'redstone' | 'brewing';
 export interface Item { id: string; en: string; de: string; stack: number; cat: ItemCat; rare?: string }
 export interface ItemFile { version: string; count: number; items: Item[] }
 
-export interface IndexedItem extends Item { fde: string; fen: string; hay: string; words: string[]; pop: number }
+export interface IndexedItem extends Item { fde: string; fen: string; hay: string; words: string[]; pop: number; groups: ItemGroup[]; dims: Dimension[] }
 
 // Most ordered first. Drives the empty state ("Beliebt zuerst") and breaks ties in search.
 export const POPULAR = ['netherite_ingot', 'elytra', 'shulker_box', 'ender_pearl', 'diamond', 'diamond_block', 'totem_of_undying', 'iron_ingot', 'oak_log', 'emerald', 'gold_ingot', 'redstone', 'obsidian', 'experience_bottle', 'golden_apple', 'iron_block', 'netherite_scrap', 'ancient_debris', 'blaze_rod', 'ender_eye', 'slime_ball', 'gunpowder', 'string', 'quartz', 'lapis_lazuli', 'copper_ingot', 'cobblestone', 'glass', 'torch', 'bread', 'cooked_beef', 'firework_rocket', 'beacon', 'spruce_log', 'stone_bricks', 'deepslate_bricks', 'white_wool', 'bone_meal', 'honey_block', 'sea_lantern', 'netherite_pickaxe', 'diamond_pickaxe', 'enchanted_book', 'netherite_block', 'purple_shulker_box'];
@@ -47,7 +48,7 @@ export function lev(a: string, b: string, max: number) {
 export function indexItems(items: Item[]): IndexedItem[] {
   return items.map((it) => {
     const de = fold(it.de), en = fold(it.en), id = fold(it.id);
-    return { ...it, fde: de, fen: en, hay: `${de} | ${en} | ${id}`, words: `${de} ${en} ${id}`.split(' ').filter(Boolean), pop: POPRANK[it.id] ?? 0 };
+    return { ...it, fde: de, fen: en, hay: `${de} | ${en} | ${id}`, words: `${de} ${en} ${id}`.split(' ').filter(Boolean), pop: POPRANK[it.id] ?? 0, groups: groupsOf(it.id), dims: dimensionsOf(it.id) };
   });
 }
 

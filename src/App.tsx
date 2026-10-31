@@ -4,18 +4,21 @@ import { RouterProvider, useRouter } from './ui/router';
 import { SearchProvider } from './ui/search';
 import { Layout } from './ui/Layout';
 import { HomePage } from './pages/Home';
-import { ItemsPage } from './pages/Items';
+import { CartPage, ItemPage, ItemsPage } from './pages/Items';
 import { FarmPage } from './pages/Farms';
 import { MyOrdersPage, OrderPage } from './pages/Orders';
 import { MyDataPage, NoticesPage, PrivacyPage, SignInPage, TermsPage } from './pages/Account';
 import { useStore } from './data/store';
 import { BackstagePage, BetaPage, ClientsPage, SettingsPage } from './pages/Backstage';
+import { RewardsPage, ShopPage } from './pages/Shop';
 
 function Pages() {
   const { route } = useRouter();
   const { mode } = useStore();
   switch (route.page) {
     case 'items': return <ItemsPage />;
+    case 'item': return <ItemPage key={route.id} id={route.id} />;
+    case 'cart': return <CartPage />;
     case 'farm': return <FarmPage key={route.id} id={route.id} />;
     case 'orders': return <MyOrdersPage />;
     case 'order': return <OrderPage key={route.id} id={route.id} />;
@@ -25,6 +28,8 @@ function Pages() {
     case 'backstage': return <BackstagePage />;
     case 'clients': return <ClientsPage />;
     case 'settings': return <SettingsPage />;
+    case 'shop': return <ShopPage />;
+    case 'rewards': return <RewardsPage />;
     case 'beta': return mode === 'beta' ? <BetaPage /> : <HomePage />;
     case 'privacy': return <PrivacyPage />;
     case 'account': return <MyDataPage />;

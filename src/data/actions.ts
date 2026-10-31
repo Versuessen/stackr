@@ -2,12 +2,17 @@
 // returns a new DB, and throws ActionError (with an i18n key) when a rule forbids the change.
 // A future server would run these same functions, so the rules stay in one place.
 
-import type { Account, CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, TokenType } from '../domain/types.js';
+import type { Account, CustomLine, DB, FarmTier, ID, Order, OrderLine, OrderStatus, Rating, SellerProfile, SubscriptionPlan, TokenType } from '../domain/types.js';
 import { cartTotals, unitOk } from '../domain/items.js';
 import {
   CONFIG, DAY, activeBlacklist, bulkLimit, checkCanOrder, clientStats, iso, nextLevelState, nowFrom, sellerStats,
 } from '../domain/rules.js';
 import { emptyDB, exampleDB } from '../domain/catalog.js';
+import { TIER_INCLUDES } from '../domain/farms.js';
+import { EARN, PLANS, SUB_PERIOD_DAYS, TOKEN_PRICE, activeEvent, balance, orderEarnings, type GiftReward } from '../domain/points.js';
+
+/** Most delivery waves a material order can be split into. */
+export const MAX_WAVES = 6;
 
 export class ActionError extends Error {
   constructor(public key: string, public vars?: Record<string, string | number>) { super(key); }
@@ -41,6 +46,15 @@ function sellerAccountId(db: DB, o: Order) { return seller(db, o.sellerId).accou
 
 function notify(db: DB, now: number, accountId: ID, key: string, o?: Order, vars?: Record<string, string | number>) {
   db.notices.push({ id: uid('n'), accountId, orderId: o?.id, key, vars: { number: o?.number ?? '', ...vars }, at: iso(now), read: false });
+}
+
+function addPoints(db: DB, now: number, accountId: ID, delta: number, reason: string, vars?: Record<string, string | number>, orderId?: ID) {
+  if (!delta) return;
+  (db.points ??= []).push({ id: uid('pt'), accountId, delta, reason, vars, orderId, at: iso(now) });
+}
+
+function requireSellerActor(db: DB, actorId: ID) {
+  if (!db.accounts.find((a) => a.id === actorId)?.sellerId) throw new ActionError('err.notAllowed');
 }
 
 function setStatus(o: Order, status: OrderStatus, by: ID, now: number, note?: string) {
@@ -105,6 +119,7 @@ export const createAccount = (id: ID, mcName: string, mcUuid: string, confirmed:
   db.accounts.push(acc);
   db.tokens.push({ id: uid('tok'), ownerId: acc.id, type: 'priority', source: 'first_order', grantedAt: iso(now) });
   notify(db, now, acc.id, confirmed ? 'notice.welcomeToken' : 'notice.welcomeUnconfirmed');
+  addPoints(db, now, acc.id, EARN.welcome, 'points.r.welcome');
 };
 
 /** First-time setup: the seller claims the seller account (with the secret setup code). */
@@ -213,6 +228,7 @@ export interface OrderInput {
   lines?: OrderLine[];
   customLines?: CustomLine[];
   batches: number;
+  waveDates?: string[];
   farmTier?: FarmTier;
   extras: string[];
   coords?: Order['coords'];
@@ -252,13 +268,22 @@ export const placeOrder = (input: OrderInput, onId: (id: ID) => void): Mut => (d
     if (limit !== null && slots > limit) throw new ActionError('err.bulkLimit', { limit });
     input = { ...input, lines };
   }
-  const batches = Math.max(1, Math.min(input.batches || 1, svc.kind === 'material' ? Math.min(3, slots) : 1));
+  // Delivery in waves is an option the client picks; never more waves than inventory slots.
+  const batches = Math.max(1, Math.min(input.batches || 1, svc.kind === 'material' ? Math.min(MAX_WAVES, slots) : 1));
+  const today = iso(now).slice(0, 10);
+  const waveDates = batches > 1 && input.waveDates?.length
+    ? input.waveDates.slice(0, batches).map((d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) && d >= today ? d : ''))
+    : undefined;
+  // Higher tiers include extras (bigger storage, sorting); they are always part of the order.
+  const extras = svc.kind === 'farm' && input.farmTier
+    ? [...new Set([...TIER_INCLUDES[input.farmTier], ...input.extras.filter((x) => svc.extras?.some((e) => e.id === x))])]
+    : input.extras;
 
   const o: Order = {
     id: uid('ord'), number: db.nextOrderNumber++, clientId: input.clientId, sellerId: s.id, serviceId: svc.id,
     kind: svc.kind, title: input.title.trim(), details: input.details.trim(), quantity: input.quantity, unit: input.unit,
     lines: input.lines, customLines: input.customLines,
-    batches, batchesDelivered: 0, farmTier: svc.kind === 'farm' ? input.farmTier : undefined, extras: input.extras,
+    batches, waveDates, batchesDelivered: 0, farmTier: svc.kind === 'farm' ? input.farmTier : undefined, extras,
     coords: input.coords, deliveryMethod: input.deliveryMethod, clientProvidesMaterials: input.clientProvidesMaterials,
     offer: input.offer.trim(), tokens: input.tokenIds, status: 'received', history: [], messages: [],
     createdAt: iso(now), tosAcceptedAt: iso(now), vacationAcknowledged: s.vacation.on ? true : undefined, complaints: [],
@@ -288,9 +313,19 @@ export const proposeTerms = (orderId: ID, actorId: ID, price: string, days: numb
   requireStatus(o, 'received');
   if (!price.trim() || !(days >= 1)) throw new ActionError('err.termsIncomplete');
   o.terms = { price: price.trim(), days: Math.round(days), note: note.trim() || undefined, proposedAt: iso(now) };
-  notify(db, now, o.clientId, 'notice.termsProposed', o);
+  // The seller kept exactly what the client offered: nothing to confirm, the terms stand.
+  if (samePrice(o.terms.price, o.offer)) {
+    o.terms.acceptedAt = iso(now);
+    o.terms.autoAccepted = true;
+    notify(db, now, o.clientId, 'notice.termsAutoAccepted', o, { days: o.terms.days });
+  } else {
+    notify(db, now, o.clientId, 'notice.termsProposed', o);
+  }
   touchSeller(db, o, now);
 };
+
+/** Same price, ignoring case and spacing ("2 Diamanten" = "2  diamanten"). */
+export const samePrice = (a: string, b: string) => !!b.trim() && a.trim().toLowerCase().replace(/\s+/g, ' ') === b.trim().toLowerCase().replace(/\s+/g, ' ');
 
 export const acceptTerms = (orderId: ID, actorId: ID): Mut => (db, now) => {
   const o = order(db, orderId);
@@ -392,6 +427,14 @@ function complete(db: DB, o: Order, by: ID, now: number, auto: boolean) {
     db.tokens.push({ id: uid('tok'), ownerId: o.clientId, type: 'priority', source: 'repeat_client', grantedAt: iso(now) });
     notify(db, now, o.clientId, 'notice.repeatToken', o);
   }
+  // Points: every order, a big bonus for bringing your own materials, loyalty every few orders,
+  // all multiplied during an event.
+  const ev = activeEvent(db, now);
+  const mult = ev?.multiplier ?? 1;
+  const earn = orderEarnings(o);
+  addPoints(db, now, o.clientId, earn.base * mult, 'points.r.order', ev ? { event: ev.name } : undefined, o.id);
+  if (earn.own) addPoints(db, now, o.clientId, earn.own * mult, 'points.r.ownMaterials', undefined, o.id);
+  if (done % EARN.loyaltyEvery === 0) addPoints(db, now, o.clientId, EARN.loyalty, 'points.r.loyalty', { n: done });
   notify(db, now, o.clientId, auto ? 'notice.autoCompleted' : 'notice.status.completed', o);
   notify(db, now, sellerAccountId(db, o), auto ? 'notice.autoCompleted' : 'notice.approved', o);
   refreshSellerLevel(db, o.sellerId, now);
@@ -423,6 +466,7 @@ export const rate = (orderId: ID, actorId: ID, rating: Omit<Rating, 'at'>): Mut 
   if (o.rating) throw new ActionError('err.alreadyRated');
   if (!(rating.stars >= 1 && rating.stars <= 5)) throw new ActionError('err.starsRequired');
   o.rating = { ...rating, at: iso(now) };
+  addPoints(db, now, actorId, EARN.rating, 'points.r.rating', undefined, o.id);
   notify(db, now, sellerAccountId(db, o), 'notice.rated', o, { stars: rating.stars });
   refreshSellerLevel(db, o.sellerId, now);
 };
@@ -476,6 +520,74 @@ export const grantToken = (actorId: ID, clientId: ID, type: TokenType): Mut => (
   notify(db, now, clientId, 'notice.tokenGranted', undefined, { type });
 };
 
+// ---------- Points shop ----------
+
+/** Trade points for a token. */
+export const buyToken = (actorId: ID, type: TokenType): Mut => (db, now) => {
+  const price = TOKEN_PRICE[type];
+  if (!price) throw new ActionError('err.notAllowed');
+  if (balance(db, actorId) < price) throw new ActionError('err.notEnoughPoints', { n: price });
+  addPoints(db, now, actorId, -price, 'points.r.bought', { type });
+  db.tokens.push({ id: uid('tok'), ownerId: actorId, type, source: 'shop', grantedAt: iso(now) });
+};
+
+export const grantPoints = (actorId: ID, clientId: ID, n: number, note: string): Mut => (db, now) => {
+  requireSellerActor(db, actorId);
+  if (!db.accounts.some((a) => a.id === clientId && !a.deletedAt && !a.disabledAt)) throw new ActionError('err.accountMissing');
+  if (!Number.isInteger(n) || n === 0 || Math.abs(n) > 10000) throw new ActionError('err.invalidInput');
+  addPoints(db, now, clientId, n, n > 0 ? 'points.r.granted' : 'points.r.corrected', note.trim() ? { note: note.trim().slice(0, 80) } : undefined);
+  if (n > 0) notify(db, now, clientId, 'notice.pointsGranted', undefined, { n });
+};
+
+/** Reward from a gift code (the code itself is checked on the server). */
+export const applyGift = (accountId: ID, reward: GiftReward): Mut => (db, now) => {
+  if (reward.kind === 'points') addPoints(db, now, accountId, reward.n, 'points.r.gift');
+  else db.tokens.push({ id: uid('tok'), ownerId: accountId, type: reward.type, source: 'gift', grantedAt: iso(now) });
+  notify(db, now, accountId, 'notice.giftRedeemed', undefined, reward.kind === 'points' ? { what: `${reward.n}` } : { what: reward.type });
+};
+
+export const startEvent = (actorId: ID, name: string, multiplier: number, days: number): Mut => (db, now) => {
+  requireSellerActor(db, actorId);
+  if (!name.trim() || ![2, 3].includes(multiplier) || !(days >= 1 && days <= 60)) throw new ActionError('err.invalidInput');
+  db.events = (db.events ?? []).filter((e) => Date.parse(e.endsAt) > now - 90 * DAY);
+  for (const e of db.events) if (Date.parse(e.endsAt) > now) e.endsAt = iso(now); // one event at a time
+  db.events.push({ id: uid('ev'), name: name.trim().slice(0, 60), multiplier, startsAt: iso(now), endsAt: iso(now + days * DAY) });
+};
+
+export const endEvent = (actorId: ID): Mut => (db, now) => {
+  requireSellerActor(db, actorId);
+  for (const e of db.events ?? []) if (Date.parse(e.endsAt) > now) e.endsAt = iso(now);
+};
+
+export const setSubscription = (actorId: ID, clientId: ID, plan: SubscriptionPlan, months: number): Mut => (db, now) => {
+  requireSellerActor(db, actorId);
+  if (!db.accounts.some((a) => a.id === clientId && !a.deletedAt && !a.disabledAt)) throw new ActionError('err.accountMissing');
+  if (!PLANS[plan] || !(months >= 1 && months <= 12)) throw new ActionError('err.invalidInput');
+  db.subscriptions = (db.subscriptions ?? []).filter((s) => s.accountId !== clientId);
+  db.subscriptions.push({ accountId: clientId, plan, startedAt: iso(now), endsAt: iso(now + months * SUB_PERIOD_DAYS * DAY), nextCreditAt: iso(now) });
+  creditSubscriptions(db, now);
+  notify(db, now, clientId, 'notice.subscriptionStarted', undefined, { plan, months });
+};
+
+export const cancelSubscription = (actorId: ID, clientId: ID): Mut => (db, now) => {
+  requireSellerActor(db, actorId);
+  const s = (db.subscriptions ?? []).find((x) => x.accountId === clientId && !x.cancelledAt);
+  if (s) { s.cancelledAt = iso(now); s.endsAt = iso(now); }
+};
+
+/** Pays out subscription points (and tokens) that are due. Runs with the housekeeping tick. */
+function creditSubscriptions(db: DB, now: number) {
+  for (const s of db.subscriptions ?? []) {
+    let guard = 0;
+    while (!s.cancelledAt && Date.parse(s.nextCreditAt) <= now && Date.parse(s.nextCreditAt) < Date.parse(s.endsAt) && guard++ < 13) {
+      const plan = PLANS[s.plan];
+      addPoints(db, now, s.accountId, plan.points, 'points.r.subscription', { plan: s.plan });
+      if (plan.token) db.tokens.push({ id: uid('tok'), ownerId: s.accountId, type: plan.token, source: 'subscription', grantedAt: iso(now) });
+      s.nextCreditAt = iso(Date.parse(s.nextCreditAt) + SUB_PERIOD_DAYS * DAY);
+    }
+  }
+}
+
 export const markNoticesRead = (accountId: ID): Mut => (db) => {
   for (const n of db.notices) if (n.accountId === accountId) n.read = true;
 };
@@ -489,6 +601,7 @@ export const tick: Mut = (db, now) => {
     }
   }
   for (const s of db.sellers) refreshSellerLevel(db, s.id, now);
+  creditSubscriptions(db, now);
 };
 
 // ---------- Beta tools ----------

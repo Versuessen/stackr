@@ -6,6 +6,7 @@ import {
 } from '../ui/components';
 import { Glyph, ICONS, PixelArt, iconFor } from '../ui/Pixel';
 import type { Command } from '../data/commands';
+import { samePrice } from '../data/actions';
 import { CONFIG, DAY, estimateWaitDays, isOpen, queuePosition, sellerQueue, tokensOf } from '../domain/rules';
 import { cartTotals, piecesOf, slotsOf } from '../domain/items';
 import type { Order, RatingTags } from '../domain/types';
@@ -73,14 +74,44 @@ export function MyOrdersPage() {
 
 // ---------- Single order ----------
 
+/** Price field locked to the client's offer; the seller unlocks it on purpose to change it. */
+function LockedPrice({ value, offer, onChange, onEditing }: { value: string; offer: string; onChange: (v: string) => void; onEditing: (on: boolean) => void }) {
+  const { t } = useStore();
+  const [draft, setDraft] = useState<string | null>(null);
+  const changed = !samePrice(value, offer);
+  const stop = (keep: boolean) => { if (keep && draft !== null && draft.trim()) onChange(draft.trim()); setDraft(null); onEditing(false); };
+  if (draft === null) {
+    return (
+      <div className="field-like locked" id="t-price">
+        <Glyph name="lock" size={12} />
+        <span className="min0"><b>{value || '—'}</b>{changed && <span className="badge b-warn" style={{ marginLeft: 8 }}>{t('terms.priceChanged')}</span>}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setDraft(value); onEditing(true); }}>{t('terms.unlock')}</button>
+      </div>
+    );
+  }
+  return (
+    <div className="stack-sm unlocked">
+      <input className="field" id="t-price" value={draft} autoFocus onChange={(e) => setDraft(e.target.value)} maxLength={200}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); stop(true); } if (e.key === 'Escape') stop(false); }} />
+      <div className="row-gap">
+        <button type="button" className="btn btn-primary btn-sm" disabled={!draft.trim()} onClick={() => stop(true)}>{t('terms.confirmChange')}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => stop(false)}>{t('common.cancel')}</button>
+        {!samePrice(draft, offer) && offer && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDraft(offer)}>{t('terms.backToOffer')}</button>}
+      </div>
+    </div>
+  );
+}
+
 function TermsBlock({ o, role }: { o: Order; role: 'client' | 'seller' }) {
   const { t, run, lang } = useStore();
   const [price, setPrice] = useState(o.terms?.price ?? o.offer);
   const [days, setDays] = useState(o.terms?.days ?? 3);
   const [note, setNote] = useState(o.terms?.note ?? '');
   const [editing, setEditing] = useState(!o.terms);
+  const [priceOpen, setPriceOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const negotiable = o.status === 'received';
+  const auto = samePrice(price, o.offer);
   return (
     <section className="card side-card" aria-labelledby="h-terms">
       <h2 className="t-title" id="h-terms">{t('terms.title')}</h2>
@@ -90,18 +121,25 @@ function TermsBlock({ o, role }: { o: Order; role: 'client' | 'seller' }) {
           <div><dt>{t('terms.price')}</dt><dd><b>{o.terms.price}</b></dd></div>
           <div><dt>{t('terms.days')}</dt><dd>{t('terms.daysN', { n: o.terms.days })}</dd></div>
           {o.terms.note && <div><dt>{t('terms.note')}</dt><dd>{o.terms.note}</dd></div>}
-          <div><dt>{t('terms.state')}</dt><dd>{o.terms.acceptedAt ? <span className="badge b-ok">{t('terms.accepted', { date: fmtDate(o.terms.acceptedAt, lang, false) })}</span> : <span className="badge b-warn">{t('terms.pending')}</span>}</dd></div>
+          <div><dt>{t('terms.state')}</dt><dd>{o.terms.acceptedAt
+            ? <span className="badge b-ok">{t(o.terms.autoAccepted ? 'terms.autoAccepted' : 'terms.accepted', { date: fmtDate(o.terms.acceptedAt, lang, false) })}</span>
+            : <span className="badge b-warn">{t('terms.pending')}</span>}</dd></div>
           {o.dueAt && <div><dt>{t('terms.due')}</dt><dd className="num">{fmtDate(o.dueAt, lang)}</dd></div>}
         </>)}
       </dl>
       {role === 'client' && negotiable && !o.terms && <p className="t-small ink2">{t('terms.waitingSeller')}</p>}
       {role === 'seller' && negotiable && (editing ? (
-        <form className="stack-sm" onSubmit={async (e) => { e.preventDefault(); const r = await run({ type: 'proposeTerms', orderId: o.id, price, days, note }); setErr(r); if (!r) setEditing(false); }}>
-          <Field label={t('terms.price')} htmlFor="t-price"><input className="field" id="t-price" value={price} onChange={(e) => setPrice(e.target.value)} maxLength={200} /></Field>
+        <form className="stack-sm" onSubmit={async (e) => { e.preventDefault(); if (priceOpen) return; const r = await run({ type: 'proposeTerms', orderId: o.id, price, days, note }); setErr(r); if (!r) setEditing(false); }}>
+          <div className="field-wrap">
+            <label className="t-label" htmlFor="t-price">{t('terms.price')}</label>
+            <LockedPrice value={price} offer={o.offer} onChange={setPrice} onEditing={setPriceOpen} />
+          </div>
           <Field label={t('terms.days')} htmlFor="t-days"><input className="field num" id="t-days" type="number" min={1} max={60} value={days} onChange={(e) => setDays(Number(e.target.value))} /></Field>
           <Field label={t('terms.note')} htmlFor="t-note"><input className="field" id="t-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} /></Field>
-          <div className="row-gap"><button type="submit" className="btn btn-primary">{o.terms ? t('terms.repropose') : t('terms.propose')}</button>
+          <p className={`notice t-small ${auto ? '' : 'warn'}`} style={{ margin: 0 }}>{auto ? t('terms.autoNote') : t('terms.changedNote')}</p>
+          <div className="row-gap"><button type="submit" className="btn btn-primary" disabled={priceOpen || !price.trim()}>{auto ? t('terms.confirmOffer') : o.terms ? t('terms.repropose') : t('terms.propose')}</button>
             {o.terms && <button type="button" className="btn btn-ghost" onClick={() => setEditing(false)}>{t('common.back')}</button>}</div>
+          {priceOpen && <p className="t-small mute" style={{ margin: 0 }}>{t('terms.finishPrice')}</p>}
         </form>
       ) : <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>{t('terms.change')}</button>)}
       <ErrorLine msg={err} />
@@ -287,6 +325,34 @@ function Lines({ o }: { o: Order }) {
   );
 }
 
+/** Every step with its time, opened from a clearly labelled button under the tracker. */
+function OrderHistory({ o }: { o: Order }) {
+  const { t, lang, db } = useStore();
+  const [open, setOpen] = useState(false);
+  const who = (id: string) => (id === 'system' ? t('history.system') : db.accounts.find((a) => a.id === id)?.mcName ?? '—');
+  return (
+    <div className="history">
+      <button type="button" className="btn btn-ghost btn-sm history-toggle" aria-expanded={open} aria-controls="order-history" onClick={() => setOpen((v) => !v)}>
+        <Glyph name="list" size={14} /> {open ? t('history.hide') : t('history.show', { n: o.history.length })}
+        <span className={`chev ${open ? 'up' : ''}`} aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <ol className="plain timeline card" id="order-history">
+          {[...o.history].reverse().map((h, i) => (
+            <li key={i}>
+              <span className="tl-dot" aria-hidden="true" />
+              <span className="tl-main"><b>{t(`status.short.${h.status}`)}</b>
+                {h.note?.startsWith('batch:') ? ` · ${t('order.batchLog', { n: h.note.slice(6) })}` : h.note ? ` · ${h.note === 'complaint' ? t('order.complaint') : h.note === 'released' ? t('history.released') : h.note}` : ''}
+                <span className="t-small mute"> · {who(h.by)}</span></span>
+              <span className="t-small mute num tl-time">{fmtDate(h.at, lang)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 export function OrderPage({ id }: { id: string }) {
   const { t, db, me, lang } = useStore();
   const o = db.orders.find((x) => x.id === id);
@@ -314,13 +380,14 @@ export function OrderPage({ id }: { id: string }) {
       </div>
       {pos && <p className="notice" style={{ marginTop: 16 }}>{t('order.queueLine', { n: pos, d: estimateWaitDays(seller, ahead) })}</p>}
       <Tracker order={o} />
+      <OrderHistory o={o} />
       <div className="o-grid">
         <div className="o-main">
           <NextAction o={o} role={role} />
           <Lines o={o} />
           <Messages o={o} />
         </div>
-        <aside className="o-side">
+        <aside className="o-side side-frame">
           <TermsBlock o={o} role={role} />
           <section className="card side-card" aria-labelledby="h-del">
             <h2 className="t-title" id="h-del">{o.kind === 'farm' ? t('order.build') : t('order.delivery')}</h2>
@@ -330,21 +397,22 @@ export function OrderPage({ id }: { id: string }) {
               {o.farmTier && <div><dt>{t('farm.tier')}</dt><dd>{svc?.tiers?.find((x) => x.tier === o.farmTier)?.label[lang]}</dd></div>}
               {o.extras.length > 0 && <div><dt>{t('order.f.extras')}</dt><dd>{o.extras.map((x) => svc?.extras?.find((e) => e.id === x)?.name[lang] ?? x).join(', ')}</dd></div>}
               {o.kind === 'farm' && <div><dt>{t('order.materials')}</dt><dd>{o.clientProvidesMaterials ? t('order.materialsClient') : t('order.materialsSeller')}</dd></div>}
-              {o.batches > 1 && <div><dt>{t('checkout.batches')}</dt><dd className="num">{o.batchesDelivered} / {o.batches}</dd></div>}
+              {o.batches > 1 && <div><dt>{t('waves.title')}</dt><dd>
+                <ol className="plain wave-status">
+                  {Array.from({ length: o.batches }, (_, i) => (
+                    <li key={i} className={i < o.batchesDelivered ? 'done' : ''}>
+                      <span>{t('waves.waveN', { n: i + 1 })}</span>
+                      <span className="t-small mute num">{o.waveDates?.[i] ? t('waves.wish', { date: fmtDate(o.waveDates[i], lang, false) }) : t('waves.noDate')}</span>
+                      {i < o.batchesDelivered && <span className="badge b-ok">{t('waves.delivered')}</span>}
+                    </li>
+                  ))}
+                </ol>
+              </dd></div>}
               {o.details && <div><dt>{t('order.f.details')}</dt><dd className="pre">{o.details}</dd></div>}
               {o.complaints.map((c, i) => <div key={i}><dt>{t('order.complaint')}</dt><dd>{c.text} <span className="mute t-small">({fmtDate(c.at, lang)})</span></dd></div>)}
             </dl>
             {o.autoCompleted && <p className="t-small mute">{t('order.autoCompleted', { n: CONFIG.approvalWindowDays })}</p>}
           </section>
-          <details className="card side-card log">
-            <summary className="t-title">{t('order.log')}</summary>
-            <ol className="log-list">
-              {o.history.map((h, i) => (
-                <li key={i}><span className="num t-small mute">{fmtDate(h.at, lang)}</span> {t(`status.short.${h.status}`)}
-                  {h.note?.startsWith('batch:') ? ` · ${t('order.batchLog', { n: h.note.slice(6) })}` : h.note ? ` · ${h.note === 'complaint' ? t('order.complaint') : h.note}` : ''}</li>
-              ))}
-            </ol>
-          </details>
         </aside>
       </div>
     </div>

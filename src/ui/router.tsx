@@ -6,14 +6,13 @@ export type Route =
   | { page: 'home' } | { page: 'items' } | { page: 'farm'; id: string } | { page: 'orders' }
   | { page: 'order'; id: string } | { page: 'signin' } | { page: 'notices' } | { page: 'terms' }
   | { page: 'backstage' } | { page: 'clients' } | { page: 'settings' } | { page: 'beta' }
-  | { page: 'privacy' } | { page: 'account' };
+  | { page: 'privacy' } | { page: 'account' } | { page: 'cart' } | { page: 'shop' } | { page: 'rewards' } | { page: 'item'; id: string };
 
-const SIMPLE = ['home', 'items', 'orders', 'signin', 'notices', 'terms', 'backstage', 'clients', 'settings', 'beta', 'privacy', 'account'] as const;
-const WITH_ID = ['farm', 'order'] as const;
+const SIMPLE = ['home', 'items', 'orders', 'signin', 'notices', 'terms', 'backstage', 'clients', 'settings', 'beta', 'privacy', 'account', 'cart', 'shop', 'rewards'] as const;
+const WITH_ID = ['farm', 'order', 'item'] as const;
 
 export function parse(token: string): Route {
   const raw = token.replace(/^#/, '');
-  if (raw === 'cart') return { page: 'items' };
   if (raw === 'farms') return { page: 'farm', id: 'iron' };
   if ((SIMPLE as readonly string[]).includes(raw)) return { page: raw } as Route;
   for (const p of WITH_ID) if (raw.startsWith(`${p}-`)) return { page: p, id: raw.slice(p.length + 1) };

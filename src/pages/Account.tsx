@@ -38,7 +38,7 @@ export function SignInPage() {
 
 function afterSignIn(go: ReturnType<typeof useRouter>['go'], cartItems: number, seller: boolean) {
   if (seller) go({ page: 'backstage' });
-  else go(cartItems ? { page: 'items' } : { page: 'home' }, cartItems ? 'cart' : undefined);
+  else go(cartItems ? { page: 'cart' } : { page: 'home' });
 }
 
 type AuthTab = 'login' | 'register' | 'reset';
@@ -291,6 +291,9 @@ export function NoticesPage() {
           const vars = { ...n.vars } as Record<string, string | number>;
           if (n.key === 'notice.levelUp' && vars.level) vars.level = t(`level.seller.${vars.level}`);
           if (n.key === 'notice.tokenGranted' && vars.type) vars.type = t(`token.${vars.type}`);
+          if (n.key === 'notice.giftRedeemed' && typeof vars.what === 'string' && !/^\d+$/.test(vars.what)) vars.what = t(`token.${vars.what}`);
+          else if (n.key === 'notice.giftRedeemed' && vars.what) vars.what = t('shop.price', { n: vars.what });
+          if (n.key === 'notice.subscriptionStarted' && vars.plan) vars.plan = t(`plan.${vars.plan}`);
           const body = <><span className={`notice-dot ${n.read ? '' : 'on'}`} aria-hidden="true" /><span className="notice-text">{t(n.key, vars)}</span><span className="t-small mute num">{fmtDate(n.at, lang)}</span></>;
           return (
             <li key={n.id} className={n.read ? '' : 'unread'}>

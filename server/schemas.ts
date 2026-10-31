@@ -38,7 +38,8 @@ const orderInput = z.object({
   unit: text(30).optional(),
   lines: z.array(lineInput).max(200).optional(),
   customLines: z.array(z.object({ text: text(200) })).max(20).optional(),
-  batches: int(1, 3),
+  batches: int(1, 6),
+  waveDates: z.array(z.string().regex(/^(\d{4}-\d{2}-\d{2})?$/)).max(6).optional(), // empty = no wished date for that wave
   farmTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   extras: z.array(id).max(10),
   coords: coords.optional(),
@@ -85,6 +86,12 @@ export const command = z.discriminatedUnion('type', [
   z.object({ type: z.literal('grantToken'), clientId: id, tokenType: z.enum(['priority', 'rush', 'high_effort', 'extra_slot']) }),
   z.object({ type: z.literal('markNoticesRead') }),
   z.object({ type: z.literal('confirmName'), clientId: id }),
+  z.object({ type: z.literal('buyToken'), tokenType: z.enum(['priority', 'rush', 'high_effort', 'extra_slot']) }),
+  z.object({ type: z.literal('grantPoints'), clientId: id, n: int(-10000, 10000), note: text(80) }),
+  z.object({ type: z.literal('startEvent'), name: text(60), multiplier: z.union([z.literal(2), z.literal(3)]), days: int(1, 60) }),
+  z.object({ type: z.literal('endEvent') }),
+  z.object({ type: z.literal('setSubscription'), clientId: id, plan: z.enum(['regular', 'project']), months: int(1, 12) }),
+  z.object({ type: z.literal('cancelSubscription'), clientId: id }),
 ]);
 export type CommandInput = z.infer<typeof command>;
 
@@ -105,3 +112,14 @@ export const changePasswordBody = z.object({ current: password, password });
 export const inviteBody = z.object({ name: mcName });
 export const accountRef = z.object({ accountId: id });
 export const inviteRef = z.object({ id: z.string().regex(/^\d{1,18}$/) });
+
+export const giftRedeem = z.object({ code: z.string().trim().min(16).max(40) });
+export const giftCreate = z.object({
+  reward: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('points'), n: int(1, 5000) }),
+    z.object({ kind: z.literal('token'), type: z.enum(['priority', 'rush', 'high_effort', 'extra_slot']) }),
+  ]),
+  uses: int(1, 500),
+  days: int(1, 365),
+  note: text(80),
+});

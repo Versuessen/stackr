@@ -16,6 +16,10 @@
 //   POST /api/seller/invite/revoke  seller: withdraw an invite
 //   POST /api/seller/reset-code   seller: one-time password reset code for a client
 //   POST /api/seller/release      seller: free a name claimed by the wrong person
+//   POST /api/shop/redeem         redeem a gift code (XXXX-XXXX-XXXX-XXXX)
+//   POST /api/seller/gift         seller: create a gift code (points or a token)
+//   GET  /api/seller/gifts        seller: gift codes (without the codes themselves)
+//   POST /api/seller/gift/revoke  seller: switch a gift code off
 //   GET  /api/me/export           download everything stored about me (GDPR Art. 15/20)
 //   POST /api/me/delete           erase my account (GDPR Art. 17)
 //   GET  /api/cron                daily housekeeping, Vercel Cron only (CRON_SECRET)
@@ -24,11 +28,12 @@ import QRCode from 'qrcode';
 import { ZodError } from 'zod';
 import type { Account, DB } from '../src/domain/types.js';
 import {
-  ActionError, claimSellerAccount, createAccount, deleteAccount, purgeOld, releaseName, touchLogin,
+  ActionError, applyGift, claimSellerAccount, createAccount, deleteAccount, purgeOld, releaseName, touchLogin,
 } from '../src/data/actions.js';
 import { SELLER_COMMANDS, toMut, type Command } from '../src/data/commands.js';
 import { decrypt, encrypt, newTotpSecret, normRecovery, randomToken, recoveryCodes, safeEqual, sha256, subKey, verifyTotp } from './crypto.js';
 import { storeCode, useCode } from './codes.js';
+import { claimGift, createGift, listGifts, revokeGift } from './gifts.js';
 import { audit, migrate, type Sql } from './db.js';
 import type { Env } from './env.js';
 import { HttpError, checkWriteRequest, clearCookie, clientIp, json, readJson } from './http.js';
@@ -37,7 +42,7 @@ import { lookupName } from './mojang.js';
 import { dummyHash, hashPassword, passwordProblem, verifyPassword } from './passwords.js';
 import { LIMITS, ipHash, limit } from './ratelimit.js';
 import {
-  accountRef, changePasswordBody, command as commandSchema, deleteConfirm, inviteBody, inviteRef, loginBody, registerBody,
+  accountRef, changePasswordBody, command as commandSchema, deleteConfirm, giftCreate, giftRedeem, inviteBody, inviteRef, loginBody, registerBody,
   resetBody, secondFactor, sixDigits,
 } from './schemas.js';
 import { createSession, endAllSessions, endSession, getSession, markMfa, type Session } from './session.js';
@@ -241,6 +246,42 @@ async function postChangePassword(ctx: Ctx): Promise<Response> {
   return json({ ok: true });
 }
 
+// ---------- Gift codes ----------
+
+async function postRedeem(ctx: Ctx): Promise<Response> {
+  const cur = await read(ctx.sql);
+  const account = requireAccount(ctx, cur.db);
+  await limit(ctx.sql, `gift:${account.id}`, ...LIMITS.giftAccount);
+  await limit(ctx.sql, `gift-ip:${ctx.ip}`, ...LIMITS.giftAccount);
+  const { code } = giftRedeem.parse(await readJson(ctx.req));
+  const reward = await claimGift(ctx.sql, ctx.env, code, account.id);
+  const st = await mutate(ctx.sql, applyGift(account.id, reward));
+  await audit(ctx.sql, 'gift.redeem', account.id, ctx.ip);
+  return json({ ok: true, reward, version: st.version, db: viewFor(st.db, viewerOf(st.db, ctx.session)) });
+}
+
+async function postGift(ctx: Ctx): Promise<Response> {
+  const { account } = await requireSeller(ctx);
+  await limit(ctx.sql, `seller-codes:${account.id}`, ...LIMITS.sellerCodes);
+  const b = giftCreate.parse(await readJson(ctx.req));
+  const c = await createGift(ctx.sql, ctx.env, b.reward, b.uses, b.days, b.note, account.id);
+  await audit(ctx.sql, 'gift.create', account.id, ctx.ip);
+  return json({ ok: true, ...c });
+}
+
+async function getGifts(ctx: Ctx): Promise<Response> {
+  await requireSeller(ctx);
+  return json({ gifts: await listGifts(ctx.sql) });
+}
+
+async function postRevokeGift(ctx: Ctx): Promise<Response> {
+  const { account } = await requireSeller(ctx);
+  const { id } = inviteRef.parse(await readJson(ctx.req));
+  await revokeGift(ctx.sql, id);
+  await audit(ctx.sql, 'gift.revoke', account.id, ctx.ip);
+  return json({ ok: true });
+}
+
 // ---------- Seller: invites, reset codes, releasing names ----------
 
 async function requireSeller(ctx: Ctx): Promise<{ db: DB; account: Account }> {
@@ -419,6 +460,7 @@ async function postDelete(ctx: Ctx): Promise<Response> {
   await mutate(ctx.sql, deleteAccount(account.id));
   await ctx.sql.query('delete from credentials where account_id = $1', [account.id]);
   await ctx.sql.query('delete from auth_codes where account_id = $1 or name_lc = $2', [account.id, account.mcName.toLowerCase()]);
+  await ctx.sql.query('delete from gift_redemptions where account_id = $1', [account.id]);
   await endAllSessions(ctx.sql, account.id);
   await audit(ctx.sql, 'account.delete', account.id, null);
   return json({ ok: true }, 200, {}, [clearCookie()]);
@@ -435,6 +477,7 @@ async function getCron(ctx: Ctx): Promise<Response> {
     audit: await del("delete from audit_log where at < now() - interval '90 days'"),
     pendingMfa: await del("delete from seller_mfa where enrolled_at is null and updated_at < now() - interval '1 day'"),
     codes: await del("delete from auth_codes where expires_at < now() - interval '7 days'"),
+    gifts: await del("delete from gift_codes where coalesce(revoked_at, expires_at) < now() - interval '90 days'"),
   };
   return json({ ok: true, ...result });
 }
@@ -474,6 +517,10 @@ export function createHandler(env: Env | null, sql: Sql | null) {
         case 'POST seller/invite/revoke': return await postRevokeInvite(ctx);
         case 'POST seller/reset-code': return await postResetCode(ctx);
         case 'POST seller/release': return await postRelease(ctx);
+        case 'POST shop/redeem': return await postRedeem(ctx);
+        case 'POST seller/gift': return await postGift(ctx);
+        case 'GET seller/gifts': return await getGifts(ctx);
+        case 'POST seller/gift/revoke': return await postRevokeGift(ctx);
         case 'POST auth/totp': return await postTotp(ctx);
         case 'POST auth/enroll/start': return await postEnrollStart(ctx);
         case 'POST auth/enroll/confirm': return await postEnrollConfirm(ctx);

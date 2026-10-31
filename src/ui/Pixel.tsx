@@ -1,3 +1,4 @@
+import { farmDef } from '../domain/farms';
 import React from 'react';
 import { ART, FACE, G, dayScene, endScene, iconFor as iconForRaw, netherScene, type Art, type Scene } from './pixel';
 import { useStore } from '../data/store';
@@ -51,15 +52,26 @@ export const scenes = {
   worldNether: () => get('w1', () => netherScene(130, 60, 5, undefined)) as Scene,
   worldEnd: () => get('w2', () => endScene(130, 60, 9, true)) as Scene,
   farm: (id: string, i: number): Scene => {
-    const seeds: Record<string, number> = { iron: 51, gold: 61, raid: 71, wool: 81, tree: 91, stone: 101 };
-    const s = (seeds[id] ?? 111) + i;
-    if (id === 'gold') return get(`f${id}${i}`, () => netherScene(160, 90, s, i < 2 ? 'gold' : undefined));
-    return get(`f${id}${i}`, () => dayScene(160, 90, s, i < 2 ? id : null));
+    const s = 51 + [...id].reduce((a, c) => a + c.charCodeAt(0), 0) % 97 + i;
+    const kind = farmDef(id)?.scene ?? 'day';
+    if (kind === 'nether') return get(`f${id}${i}`, () => netherScene(160, 90, s, id === 'gold' && i < 2 ? 'gold' : undefined));
+    if (kind === 'end') return get(`f${id}${i}`, () => endScene(160, 90, s, i === 0));
+    return get(`f${id}${i}`, () => dayScene(160, 90, s, i < 2 ? buildFor(id) : null));
   },
   card: (id: string): Scene => {
-    const seeds: Record<string, number> = { iron: 31, gold: 33, raid: 35, wool: 37, tree: 39, stone: 41 };
-    if (id === 'gold') return get(`c${id}`, () => netherScene(96, 72, 33, 'gold'));
-    return get(`c${id}`, () => dayScene(96, 72, seeds[id] ?? 43, id));
+    const s = 31 + [...id].reduce((a, c) => a + c.charCodeAt(0), 0) % 53;
+    const kind = farmDef(id)?.scene ?? 'day';
+    if (kind === 'nether') return get(`c${id}`, () => netherScene(96, 72, s, id === 'gold' ? 'gold' : undefined));
+    if (kind === 'end') return get(`c${id}`, () => endScene(96, 72, s, false));
+    return get(`c${id}`, () => dayScene(96, 72, s, buildFor(id)));
   },
 };
-export const isNetherFarm = (id: string) => id === 'gold';
+const OWN_BUILD = new Set(['iron', 'wool', 'tree', 'stone', 'raid', 'cane', 'bamboo', 'kelp', 'crops', 'flower', 'bonemeal', 'pumpkin']);
+const buildFor = (id: string) => (OWN_BUILD.has(id) ? id : 'generic');
+/** Icon per farm. */
+export const FARM_ICON: Record<string, string> = {
+  iron: 'iron', gold: 'gold', raid: 'raid', wool: 'wool', tree: 'tree', stone: 'stone', shulker: 'box', rocket: 'rocket',
+  cane: 'cane', bamboo: 'bamboo', bonemeal: 'bone', flower: 'flower', crops: 'wheat', pumpkin: 'pumpkin', kelp: 'kelp',
+  hoglin: 'food', blaze: 'rod', wither: 'skull', enderman: 'pearl', guardian: 'diamond', slime: 'slime', trading: 'emerald',
+};
+export const isNetherFarm = (id: string) => farmDef(id)?.scene === 'nether';

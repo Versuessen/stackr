@@ -10,8 +10,8 @@ create role stackr_backup login password 'CHANGE_ME_BACKUP';
 revoke all on schema public from public;
 grant usage on schema public to stackr_app, stackr_backup;
 
-grant select, insert, update, delete on app_state, sessions, seller_mfa, rate_limits, audit_log to stackr_app;
-grant usage, select on sequence audit_log_id_seq to stackr_app;
+grant select, insert, update, delete on app_state, sessions, seller_mfa, rate_limits, audit_log, credentials, auth_codes, gift_codes, gift_redemptions to stackr_app;
+grant usage, select on sequence audit_log_id_seq, auth_codes_id_seq, gift_codes_id_seq to stackr_app;
 
 grant select on all tables in schema public to stackr_backup;
 grant select on all sequences in schema public to stackr_backup;

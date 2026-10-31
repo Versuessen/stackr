@@ -54,5 +54,8 @@ export function viewFor(db: DB, viewer: Viewer): DB {
     tokens,
     blacklist,
     notices: db.notices.filter((n) => n.accountId === me),
+    points: (db.points ?? []).filter((p) => p.accountId === me),
+    subscriptions: (db.subscriptions ?? []).filter((s) => s.accountId === me),
+    events: db.events ?? [],
   };
 }

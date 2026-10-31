@@ -5,7 +5,7 @@
 
 import type { DB } from '../src/domain/types.js';
 import { apply, tick } from '../src/data/actions.js';
-import { emptyDB, SCHEMA_VERSION } from '../src/domain/catalog.js';
+import { emptyDB, SCHEMA_VERSION, syncCatalog } from '../src/domain/catalog.js';
 import type { Sql } from './db.js';
 
 type Mut = (db: DB, now: number) => void;
@@ -25,6 +25,7 @@ export async function load(sql: Sql): Promise<State> {
   const doc = typeof rows[0].doc === 'string' ? JSON.parse(rows[0].doc as unknown as string) as DB : rows[0].doc;
   if (doc.version !== SCHEMA_VERSION) throw new Error(`schema ${doc.version} != ${SCHEMA_VERSION}`);
   doc.clockOffsetDays = 0; // beta-only tool, never active on the server
+  syncCatalog(doc); // new farms and wording reach the stored shop without a migration
   return { db: doc, version: Number(rows[0].version) };
 }
 

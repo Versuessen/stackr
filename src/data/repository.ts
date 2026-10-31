@@ -3,7 +3,7 @@
 // theme and the cart (item ids and amounts). The session is an HttpOnly cookie, never stored here.
 
 import type { DB } from '../domain/types';
-import { SCHEMA_VERSION, exampleDB } from '../domain/catalog';
+import { SCHEMA_VERSION, exampleDB, syncCatalog } from '../domain/catalog';
 
 export interface Repository {
   load(): DB;
@@ -30,7 +30,7 @@ export class LocalRepository implements Repository {
     if (raw) {
       try {
         const db = JSON.parse(raw) as DB;
-        if (db.version === SCHEMA_VERSION) return db;
+        if (db.version === SCHEMA_VERSION) return syncCatalog(db);
       } catch { /* fall through to a fresh copy */ }
     }
     return exampleDB(Date.now());

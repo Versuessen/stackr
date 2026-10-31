@@ -9,12 +9,12 @@ import { ApiError, apiGet, apiPost } from '../data/api';
 import { DAY, activeBlacklist, clientStats, publicWaitDays, sellerQueue, sellerStats, tokensOf, unusedTokens } from '../domain/rules';
 import type { DB, TokenType } from '../domain/types';
 
-function SubNav() {
+export function SubNav() {
   const { t } = useStore();
   const { route } = useRouter();
   return (
     <nav className="seg" aria-label={t('nav.backstage')}>
-      {(['backstage', 'clients', 'settings'] as const).map((p) => (
+      {(['backstage', 'clients', 'rewards', 'settings'] as const).map((p) => (
         <Link key={p} to={{ page: p }} className="seg-link" aria-current={route.page === p ? 'page' : undefined}>{t(`bs.tab.${p}`)}</Link>
       ))}
     </nav>

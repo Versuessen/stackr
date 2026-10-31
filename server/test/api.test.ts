@@ -220,6 +220,54 @@ const e2 = await call('GET', 'state', { cookie: A, headers: { 'if-none-match': e
 ok(e2.status === 304, 'unchanged state answers 304');
 
 
+console.log('auto-accept and waves');
+const ST = steve.cookie!;
+const baseInput = { serviceId: svc, title: 'Eisen', details: '', extras: [], lines: [{ itemId: 'iron_ingot', n: 15, unit: 'stack' }],
+  coords: { x: 1, y: 64, z: 1, dimension: 'overworld' }, deliveryMethod: 'place_at_coords', clientProvidesMaterials: false, tokenIds: [], tosAccepted: true, vacationAcknowledged: false };
+const past = await cmd(ST, { type: 'placeOrder', input: { ...baseInput, offer: '5 Eisenblöcke', batches: 2, waveDates: ['2001-01-01', '2001-01-02'] } });
+ok(past.status === 200 && (past.body.db as DB).orders.find((o) => o.id === past.body.id)!.waveDates!.every((d) => d === ''), 'wished dates in the past are dropped');
+ok((await cmd(ST, { type: 'cancelByClient', orderId: past.body.id })).status === 200, 'client cancels before work starts');
+const wav = await cmd(ST, { type: 'placeOrder', input: { ...baseInput, offer: '5 Eisenblöcke', batches: 3, waveDates: ['2099-01-01', '', '2099-01-15'] } });
+ok(wav.status === 200, 'order in 3 waves with wished dates placed');
+const wo = (wav.body.db as DB).orders.find((o) => o.id === wav.body.id)!;
+ok(wo.batches === 3 && wo.waveDates?.length === 3, 'waves and dates stored');
+const same = await cmd(S, { type: 'proposeTerms', orderId: wav.body.id, price: ' 5 eisenblöcke ', days: 3, note: '' });
+const so = (same.body.db as DB).orders.find((o) => o.id === wav.body.id)!;
+ok(same.status === 200 && !!so.terms?.acceptedAt && so.terms.autoAccepted === true, 'price equal to the offer is accepted automatically');
+const wav2 = await cmd(ST, { type: 'placeOrder', input: { ...baseInput, offer: '5 Eisenblöcke', batches: 1 } });
+const diff = await cmd(S, { type: 'proposeTerms', orderId: wav2.body.id, price: '8 Eisenblöcke', days: 3, note: '' });
+ok(!(diff.body.db as DB).orders.find((o) => o.id === wav2.body.id)!.terms?.acceptedAt, 'a different price waits for the client');
+
+console.log('credits');
+const pA = (await call('GET', 'state', { cookie: A })).body.db as DB;
+const balA = (pA.points ?? []).reduce((x, p) => x + p.delta, 0);
+ok(balA === 23, 'welcome + completed order + rating = 23 credits');
+ok((pA.points ?? []).every((p) => p.accountId === clientA), 'a player only sees their own credits');
+ok((await cmd(A, { type: 'buyToken', tokenType: 'priority' })).body.error?.key === 'err.notEnoughPoints', 'cannot buy a token without enough credits');
+ok((await cmd(A, { type: 'grantPoints', clientId: clientA, n: 500, note: '' })).status === 403, 'clients cannot grant credits');
+ok((await cmd(S, { type: 'grantPoints', clientId: clientA, n: 100, note: 'Danke' })).status === 200, 'seller grants credits');
+const bought = await cmd(A, { type: 'buyToken', tokenType: 'priority' });
+ok(bought.status === 200 && (bought.body.db as DB).tokens.some((t) => t.ownerId === clientA && t.source === 'shop'), 'token bought with credits');
+ok(((bought.body.db as DB).points ?? []).reduce((x, p) => x + p.delta, 0) === 63, 'price deducted');
+
+console.log('gift codes');
+ok((await call('POST', 'seller/gift', { cookie: A, body: { reward: { kind: 'points', n: 50 }, uses: 1, days: 7, note: '' } })).status === 403, 'clients cannot create gift codes');
+const gift = await call('POST', 'seller/gift', { cookie: S, body: { reward: { kind: 'points', n: 50 }, uses: 1, days: 7, note: 'Discord' } });
+ok(gift.status === 200 && /^[2-9A-HJKMNP-Z]{4}(-[2-9A-HJKMNP-Z]{4}){3}$/.test(gift.body.code), 'gift code in XXXX-XXXX-XXXX-XXXX format');
+const gl = await call('GET', 'seller/gifts', { cookie: S });
+ok(gl.body.gifts.length === 1 && !JSON.stringify(gl.body).includes(gift.body.code), 'gift list never contains the code');
+const gstore = await sql.query<{ code_hash: string }>('select code_hash from gift_codes');
+ok(!gstore.some((r) => r.code_hash.includes(gift.body.code)), 'gift codes are stored hashed');
+ok((await call('POST', 'shop/redeem', { cookie: ST, body: { code: 'AAAA-BBBB-CCCC-DDDD' } })).status === 400, 'unknown code rejected');
+const red = await call('POST', 'shop/redeem', { cookie: ST, body: { code: gift.body.code.toLowerCase().replace(/-/g, ' ') } });
+ok(red.status === 200 && red.body.reward.n === 50, 'code redeemed (case and separators do not matter)');
+ok((await call('POST', 'shop/redeem', { cookie: ST, body: { code: gift.body.code } })).body.error?.key === 'err.giftUsed', 'same player cannot redeem twice');
+ok((await call('POST', 'shop/redeem', { cookie: A, body: { code: gift.body.code } })).body.error?.key === 'err.giftInvalid', 'used-up code rejected');
+ok((await call('POST', 'shop/redeem', { body: { code: gift.body.code } })).status === 401, 'redeeming needs an account');
+const tg = await call('POST', 'seller/gift', { cookie: S, body: { reward: { kind: 'token', type: 'rush' }, uses: 5, days: 7, note: '' } });
+ok((await call('POST', 'seller/gift/revoke', { cookie: S, body: { id: tg.body.id } })).status === 200, 'seller revokes a code');
+ok((await call('POST', 'shop/redeem', { cookie: A, body: { code: tg.body.code } })).status === 400, 'revoked code rejected');
+
 console.log('password reset and change');
 ok((await call('POST', 'seller/reset-code', { cookie: A, body: { accountId: clientA } })).status === 403, 'clients cannot create reset codes');
 const rc = await call('POST', 'seller/reset-code', { cookie: S, body: { accountId: clientA } });
@@ -256,7 +304,7 @@ const after = (await call('GET', 'state', { cookie: S5 })).body.db as DB;
 ok(!after.accounts.some((x) => x.mcName === 'Mo0nmoth'), 'name gone from the data');
 
 console.log('logout');
-await call('POST', 'auth/logout', { cookie: A2 });
+await call('POST', 'auth/logout', { cookie: A2, ip: freshIp() }); // fresh IP: the suite itself exceeds 60 writes a minute
 ok((await call('GET', 'state', { cookie: A2 })).body.me === null, 'logout ends the session');
 
 console.log('cron');

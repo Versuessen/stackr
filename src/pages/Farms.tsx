@@ -3,21 +3,22 @@ import { useStore } from '../data/store';
 import { Link, useRouter } from '../ui/router';
 import { Glyph, ICONS, PORTRAIT, PixelArt, SceneArt, sceneBg, scenes } from '../ui/Pixel';
 import { ErrorLine, Field, Stars, TokenPill, fmtDate } from '../ui/components';
-import { FARM_ICON, farmKey } from './Home';
+import { farmKey } from './Home';
+import { FARM_ICON } from '../ui/Pixel';
+import { TIER_INCLUDES, farmDef } from '../domain/farms';
 import { checkCanOrder, clientStats, sellerStats, unusedTokens } from '../domain/rules';
 import type { Coords, FarmTier, Service, Token, TokenType } from '../domain/types';
 
-const TIER_INFO: Record<FarmTier, { days: number; badge: string; incl: string[] }> = {
-  1: { days: 2, badge: 'b-line', incl: ['farm.incl.small', 'farm.incl.coords', 'farm.incl.test', 'farm.incl.chest'] },
-  2: { days: 3, badge: 'b-info', incl: ['farm.incl.mid', 'farm.incl.coords', 'farm.incl.test', 'farm.incl.double'] },
-  3: { days: 5, badge: 'b-slime', incl: ['farm.incl.big', 'farm.incl.coords', 'farm.incl.test', 'farm.incl.room'] },
+const TIER_INFO: Record<FarmTier, { badge: string; incl: string[] }> = {
+  1: { badge: 'b-line', incl: ['farm.incl.small', 'farm.incl.coords', 'farm.incl.test', 'farm.incl.double'] },
+  2: { badge: 'b-info', incl: ['farm.incl.mid', 'farm.incl.coords', 'farm.incl.test', 'farm.incl.double', 'farm.incl.storage5'] },
+  3: { badge: 'b-slime', incl: ['farm.incl.big', 'farm.incl.coords', 'farm.incl.test', 'farm.incl.double', 'farm.incl.storage5', 'farm.incl.sorting'] },
 };
 const CMP: [string, string[]][] = [
   ['farm.cmp.size', ['farm.cmp.small', 'farm.cmp.mid', 'farm.cmp.big']],
-  ['farm.cmp.storage', ['farm.cmp.chest', 'farm.cmp.double', 'farm.cmp.room']],
+  ['farm.cmp.storage', ['farm.cmp.double', 'farm.cmp.storage5', 'farm.cmp.storage5']],
   ['farm.cmp.sorting', ['farm.cmp.extra', 'farm.cmp.extra', 'farm.cmp.incl']],
   ['farm.cmp.test', ['common.yes', 'common.yes', 'common.yes']],
-  ['farm.cmp.days', ['~2', '~3', '~5']],
   ['farm.cmp.level', ['farm.cmp.lv1', 'farm.cmp.lv2', 'farm.cmp.lv3']],
 ];
 
@@ -29,7 +30,7 @@ function RequestForm({ svc, tier, extras, own, token, onTokenChange }: {
   const { go } = useRouter();
   const seller = db.sellers.find((s) => s.id === svc.sellerId)!;
   const isFarm = svc.kind === 'farm';
-  const [coords, setCoords] = useState<{ x: string; y: string; z: string; dimension: Coords['dimension'] }>({ x: '', y: '', z: '', dimension: svc.id.endsWith('gold') ? 'nether' : 'overworld' });
+  const [coords, setCoords] = useState<{ x: string; y: string; z: string; dimension: Coords['dimension'] }>({ x: '', y: '', z: '', dimension: farmDef(farmKey(svc))?.dimension ?? 'overworld' });
   const [offer, setOffer] = useState('');
   const [details, setDetails] = useState('');
   const [title, setTitle] = useState('');
@@ -146,13 +147,20 @@ export function FarmPage({ id }: { id: string }) {
   const locked = isFarm && tier > myLevel;
   const blocked = locked && !(token && myHighEffort > 0);
   const tierLabel = svc.tiers?.find((x) => x.tier === tier)?.label[lang] ?? '';
-  const nether = key === 'gold';
+  const def = farmDef(key);
+  const days = def?.days ?? [2, 3, 5];
+  const included = TIER_INCLUDES[tier];
+  const allExtras = [...new Set([...included, ...extras])];
+  const nether = def?.scene === 'nether';
+  const end = def?.scene === 'end';
   const pics = isFarm ? [0, 1, 2].map((i) => scenes.farm(key, i)) : [];
-  const bg = (sc: (typeof pics)[number]) => (nether ? '#2a0c10' : sceneBg(sc, theme));
+  const bg = (sc: (typeof pics)[number]) => (nether ? '#2a0c10' : end ? '#0d0b16' : sceneBg(sc, theme));
   const reviews = db.orders.filter((o) => o.sellerId === seller.id && o.rating).slice(-3).reverse();
 
   return (
     <div className="wrap gig-page">
+      <div className="gig-grid">
+        <div className="gig-main" key={svc.id}>
       <nav className="crumbs" aria-label={t('nav.path')}><Link to={{ page: 'home' }}>{t('nav.home')}</Link><span aria-hidden="true">/</span><Link to={{ page: 'farm', id: 'iron' }}>{t('nav.farms')}</Link><span aria-hidden="true">/</span><span aria-current="page">{svc.name[lang]}</span></nav>
       <div className="scroller ftabs" role="tablist" aria-label={t('farm.pick')}>
         {[...farms, ...(custom ? [custom] : [])].map((f) => {
@@ -164,9 +172,6 @@ export function FarmPage({ id }: { id: string }) {
           );
         })}
       </div>
-
-      <div className="gig-grid">
-        <div className="gig-main" key={svc.id}>
           <h1 className="d-m">{isFarm ? t('farm.title', { name: svc.name[lang] }) : t('custom.title')}</h1>
           <div className="seller">
             <span className="avatar" aria-hidden="true"><PixelArt art={PORTRAIT} vb="0 0 8 8" size={32} /></span>
@@ -190,6 +195,7 @@ export function FarmPage({ id }: { id: string }) {
               <section className="block" aria-labelledby="h-about">
                 <h2 className="t-title" id="h-about">{t('farm.about')}</h2>
                 <p className="t-lead">{svc.description[lang]}</p>
+                {def && <p className="t-body"><b>{t('farm.output')}</b> {def.output[lang]}</p>}
                 <p className="t-body ink2">{t('farm.aboutBody')}</p>
               </section>
               <section className="block" aria-labelledby="h-cmp">
@@ -197,7 +203,10 @@ export function FarmPage({ id }: { id: string }) {
                 <div className="cmp-wrap card">
                   <table className="cmp">
                     <thead><tr><th scope="col"><span className="sr">{t('farm.cmp.feature')}</span></th>{svc.tiers!.map((x) => <th key={x.tier} scope="col" className={x.tier === tier ? 'on' : ''}>{x.label[lang]}</th>)}</tr></thead>
-                    <tbody>{CMP.map(([label, cells]) => <tr key={label}><th scope="row">{t(label)}</th>{cells.map((v, i) => <td key={i} className={i + 1 === tier ? 'on' : ''}>{v.startsWith('~') ? `${v} ${t('common.days')}` : t(v)}</td>)}</tr>)}</tbody>
+                    <tbody>
+                      {CMP.map(([label, cells]) => <tr key={label}><th scope="row">{t(label)}</th>{cells.map((v, i) => <td key={i} className={i + 1 === tier ? 'on' : ''}>{t(v)}</td>)}</tr>)}
+                      <tr><th scope="row">{t('farm.cmp.days')}</th>{days.map((d, i) => <td key={i} className={i + 1 === tier ? 'on' : ''}>~{t('common.nDays', { n: d })}</td>)}</tr>
+                    </tbody>
                   </table>
                 </div>
               </section>
@@ -230,7 +239,7 @@ export function FarmPage({ id }: { id: string }) {
           </section>
         </div>
 
-        <aside className="pkg card" aria-label={t('farm.pkg')}>
+        <aside className="pkg card side-frame" aria-label={t('farm.pkg')}>
           {isFarm && svc.tiers ? (
             <>
               <div className="ptabs" role="tablist" aria-label={t('farm.tier')}>
@@ -245,8 +254,18 @@ export function FarmPage({ id }: { id: string }) {
                 <p className="t-body ink2">{t(`farm.tierDesc.${tier}`)}</p>
                 <ul className="incl plain">{TIER_INFO[tier].incl.map((k) => <li key={k}><Glyph name="check" size={12} color="var(--ok)" /><span>{t(k)}</span></li>)}</ul>
                 <fieldset className="extras"><legend className="t-label mute">{t('order.f.extras')}</legend>
-                  {svc.extras?.map((x) => <label key={x.id} className="check"><input type="checkbox" checked={extras.includes(x.id)} onChange={(e) => setExtras((xs) => e.target.checked ? [...xs, x.id] : xs.filter((i) => i !== x.id))} />{x.name[lang]}</label>)}
-                  <label className="check"><input type="checkbox" checked={own} onChange={(e) => setOwn(e.target.checked)} />{t('order.f.ownMaterials')}</label>
+                  {svc.extras?.map((x) => {
+                    const incl = included.includes(x.id);
+                    return (
+                      <label key={x.id} className={`check ${incl ? 'incl' : ''}`}>
+                        <input type="checkbox" checked={incl || extras.includes(x.id)} disabled={incl}
+                          onChange={(e) => setExtras((xs) => e.target.checked ? [...xs, x.id] : xs.filter((i) => i !== x.id))} />
+                        <span>{x.name[lang]}{incl && <span className="badge b-ok" style={{ marginLeft: 6 }}>{t('farm.inclBadge')}</span>}
+                          {x.id === 'sorting' && <span className="t-small mute" style={{ display: 'block' }}>{t('farm.sortingHint')}</span>}</span>
+                      </label>
+                    );
+                  })}
+                  <label className="check"><input type="checkbox" checked={own} onChange={(e) => setOwn(e.target.checked)} /><span>{t('order.f.ownMaterials')}<span className="t-small mute" style={{ display: 'block' }}>{t('order.f.ownMaterialsHint')}</span></span></label>
                 </fieldset>
                 {locked && (
                   <div className="lockbox">
@@ -256,9 +275,9 @@ export function FarmPage({ id }: { id: string }) {
                       : <p className="t-small ink2" style={{ margin: '8px 0' }}>{t('farm.noToken')}</p>}
                   </div>
                 )}
-                <div className="pkg-price"><span className="t-label mute">{t('farm.price')}</span><span className="t-body"><b>{t('farm.priceOffer')}</b>{t('farm.priceRest', { n: TIER_INFO[tier].days })}</span></div>
+                <div className="pkg-price"><span className="t-label mute">{t('farm.price')}</span><span className="t-body"><b>{t('farm.priceOffer')}</b>{t('farm.priceRest', { n: days[tier - 1] })}</span></div>
                 {asking && !blocked ? (
-                  <RequestForm svc={svc} tier={tier} extras={extras} own={own} token={token} />
+                  <RequestForm svc={svc} tier={tier} extras={allExtras} own={own} token={token} />
                 ) : (
                   <>
                     <button className="btn btn-primary btn-lg btn-block" type="button" disabled={blocked} aria-describedby={blocked ? 'why-off' : undefined} onClick={() => setAsking(true)}>{blocked ? t('farm.ctaLocked', { name: tierLabel }) : t('farm.cta', { name: tierLabel })}</button>

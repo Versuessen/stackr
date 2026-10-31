@@ -3,7 +3,7 @@ import { useStore } from '../data/store';
 import { Link, useRouter } from './router';
 import { useSearch } from './search';
 import { Glyph, PixelArt, iconFor } from './Pixel';
-import { defaultUnit, searchItems, suggestItem } from '../domain/items';
+import { searchItems, suggestItem } from '../domain/items';
 import { publicWaitDays } from '../domain/rules';
 
 export function Logo({ light = false }: { light?: boolean }) {
@@ -26,7 +26,7 @@ export function useShopStatus() {
 }
 
 function HeaderSearch() {
-  const { t, items, itemsState, addToCart, lang } = useStore();
+  const { t, items, itemsState, lang } = useStore();
   const { route, go } = useRouter();
   const { q, setQ, setSet } = useSearch();
   const live = route.page === 'items';
@@ -38,7 +38,8 @@ function HeaderSearch() {
   const sug = !res.length && q.trim().length >= 3 && itemsState === 'ready' ? suggestItem(items, q, lang) : null;
   const show = !live && open && q.trim().length > 0;
   const toShop = () => { setOpen(false); setSet(''); go({ page: 'items' }); };
-  const pick = (i: number) => { const it = top[i]; if (!it) return; addToCart(it, 1, defaultUnit(it)); setOpen(false); setAct(-1); };
+  // A suggestion opens that item's page, where amount and unit are chosen. Nothing is added yet.
+  const pick = (i: number) => { const it = top[i]; if (!it) return; setOpen(false); setAct(-1); go({ page: 'item', id: it.id }); };
 
   return (
     <div className="srch" role="search">
@@ -70,7 +71,7 @@ function HeaderSearch() {
                   onMouseDown={(e) => { e.preventDefault(); pick(i); }} onMouseEnter={() => setAct(i)}>
                   <span className="sug-ic"><PixelArt art={iconFor(it)} size={28} /></span>
                   <span className="min0"><span className="sug-name">{lang === 'de' ? it.de : it.en}</span><span className="sug-sub">{lang === 'de' ? it.en : it.de} · {it.id}</span></span>
-                  <span className="sug-add">+ 1 {t(it.stack > 1 ? 'unit.stack' : 'unit.piece')}</span>
+                  <span className="sug-add">{t('search.open')} <Glyph name="arrow" size={12} /></span>
                 </li>
               ))}
             </ul>
@@ -173,7 +174,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <Glyph name="bell" /><span className="hl-text">{t('nav.notices')}</span>{unread > 0 && <span className="pip num">{unread}</span>}
               </Link>
             )}
-            <Link to={{ page: 'items' }} anchor="cart" className={`cartbtn ${bump ? 'bump' : ''}`} aria-label={t('nav.cartN', { n: cart.length })}>
+            <Link to={{ page: 'cart' }} aria-current={cur('cart')} className={`cartbtn ${bump ? 'bump' : ''}`} aria-label={t('nav.cartN', { n: cart.length })}>
               <Glyph name="cart" size={18} /><span className="hl-text">{t('nav.cart')}</span><span className="n">{cart.length}</span>
             </Link>
             <AccountMenu />
@@ -183,6 +184,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <Link to={{ page: 'items' }} aria-current={cur('items')}>{t('nav.items')}</Link>
           <Link to={{ page: 'farm', id: 'iron' }} aria-current={route.page === 'farm' && route.id !== 'custom' ? 'page' : undefined}>{t('nav.farms')}</Link>
           <Link to={{ page: 'farm', id: 'custom' }} aria-current={route.page === 'farm' && route.id === 'custom' ? 'page' : undefined}>{t('nav.custom')}</Link>
+          <Link to={{ page: 'shop' }} aria-current={cur('shop')}>{t('nav.shop')}</Link>
           <Link to={{ page: 'home' }} anchor="ablauf">{t('nav.how')}</Link>
           <Link to={{ page: 'terms' }} aria-current={cur('terms')}>{t('nav.terms')}</Link>
           {mySeller && <Link to={{ page: 'backstage' }} aria-current={['backstage', 'clients', 'settings'].includes(route.page) ? 'page' : undefined}>{t('nav.backstage')}{newOrders > 0 && <span className="pip num">{newOrders}</span>}</Link>}
@@ -203,7 +205,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <p className="t-body" style={{ color: '#d6d4dc', maxWidth: '36ch' }}>{t('foot.about')}</p>
           </div>
           <div className="foot-col"><h3>{t('foot.shop')}</h3><Link to={{ page: 'items' }}>{t('nav.items')}</Link><Link to={{ page: 'farm', id: 'iron' }}>{t('nav.farms')}</Link><Link to={{ page: 'farm', id: 'custom' }}>{t('nav.custom')}</Link></div>
-          <div className="foot-col"><h3>{t('foot.account')}</h3>{me ? <Link to={{ page: 'orders' }}>{t('nav.myOrders')}</Link> : <Link to={{ page: 'signin' }}>{t('nav.signIn')}</Link>}<Link to={{ page: 'items' }} anchor="cart">{t('nav.cart')}</Link>{mode === 'beta' && <Link to={{ page: 'beta' }}>{t('nav.betaTools')}</Link>}</div>
+          <div className="foot-col"><h3>{t('foot.account')}</h3>{me ? <Link to={{ page: 'orders' }}>{t('nav.myOrders')}</Link> : <Link to={{ page: 'signin' }}>{t('nav.signIn')}</Link>}<Link to={{ page: 'cart' }}>{t('nav.cart')}</Link>{mode === 'beta' && <Link to={{ page: 'beta' }}>{t('nav.betaTools')}</Link>}</div>
           <div className="foot-col"><h3>Stackr</h3><Link to={{ page: 'home' }} anchor="ablauf">{t('nav.how')}</Link><Link to={{ page: 'terms' }}>{t('nav.terms')}</Link><Link to={{ page: 'privacy' }}>{t('nav.privacy')}</Link></div>
         </div>
         <div className="wrap foot-base"><span>{t(mode === 'live' ? 'foot.live' : 'foot.beta')}</span><span>{t('foot.note')}</span></div>

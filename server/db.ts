@@ -63,6 +63,23 @@ const MIGRATIONS = [
      expires_at timestamptz not null,
      used_at timestamptz)`,
   `create index if not exists auth_codes_lookup on auth_codes (kind, name_lc)`,
+  `create table if not exists gift_codes (
+     id bigserial primary key,
+     code_hash text not null unique,
+     hint text not null,
+     reward jsonb not null,
+     max_uses integer not null,
+     uses integer not null default 0,
+     note text not null default '',
+     created_by text not null,
+     created_at timestamptz not null default now(),
+     expires_at timestamptz not null,
+     revoked_at timestamptz)`,
+  `create table if not exists gift_redemptions (
+     code_id bigint not null references gift_codes (id) on delete cascade,
+     account_id text not null,
+     at timestamptz not null default now(),
+     primary key (code_id, account_id))`,
 ];
 
 const ready = new WeakMap<Sql, Promise<void>>();
@@ -73,8 +90,8 @@ export function migrate(sql: Sql): Promise<void> {
     p = (async () => {
       // Skip DDL when everything exists, so a least-privilege role (no CREATE rights) works.
       const r = await sql.query<{ n: number }>(
-        "select count(*)::int as n from unnest(array['app_state','sessions','seller_mfa','rate_limits','audit_log','credentials','auth_codes']) t where to_regclass('public.' || t) is not null");
-      if (Number(r[0]?.n) === 7) return;
+        "select count(*)::int as n from unnest(array['app_state','sessions','seller_mfa','rate_limits','audit_log','credentials','auth_codes','gift_codes','gift_redemptions']) t where to_regclass('public.' || t) is not null");
+      if (Number(r[0]?.n) === 9) return;
       for (const m of MIGRATIONS) await sql.query(m);
     })();
     p.catch(() => ready.delete(sql));

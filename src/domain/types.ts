@@ -71,7 +71,7 @@ export interface Token {
   id: ID;
   ownerId: ID; // client account
   type: TokenType;
-  source: 'first_order' | 'repeat_client' | 'granted';
+  source: 'first_order' | 'repeat_client' | 'granted' | 'shop' | 'gift' | 'subscription';
   grantedAt: ISODate;
   usedOnOrderId?: ID;
 }
@@ -89,6 +89,7 @@ export interface Terms {
   note?: string;
   proposedAt: ISODate;
   acceptedAt?: ISODate;
+  autoAccepted?: boolean; // the seller kept the client's offer, so no confirmation was needed
 }
 
 export interface StatusEvent {
@@ -154,7 +155,8 @@ export interface Order {
   unit?: string;
   lines?: OrderLine[]; // material orders from the cart
   customLines?: CustomLine[]; // "Sonderwunsch" lines from the cart
-  batches: number; // client-chosen delivery stages, 1 = all at once
+  batches: number; // client-chosen delivery waves, 1 = all at once
+  waveDates?: string[]; // wished date per wave (YYYY-MM-DD), optional
   batchesDelivered: number;
   farmTier?: FarmTier;
   extras: string[];
@@ -200,6 +202,38 @@ export interface Notice {
   read: boolean;
 }
 
+/** One change to a player's points: positive when earned, negative when spent. */
+export interface PointEntry {
+  id: ID;
+  accountId: ID;
+  delta: number;
+  reason: string; // i18n key, e.g. points.r.order
+  vars?: Record<string, string | number>;
+  orderId?: ID;
+  at: ISODate;
+}
+
+/** A time-limited bonus the seller starts (e.g. double points over Christmas). */
+export interface ShopEvent {
+  id: ID;
+  name: string;
+  multiplier: number; // 2 = double points
+  startsAt: ISODate;
+  endsAt: ISODate;
+}
+
+export type SubscriptionPlan = 'regular' | 'project';
+
+/** Paid in-game and switched on by the seller; credits points every 30 days until it ends. */
+export interface Subscription {
+  accountId: ID;
+  plan: SubscriptionPlan;
+  startedAt: ISODate;
+  endsAt: ISODate;
+  nextCreditAt: ISODate;
+  cancelledAt?: ISODate;
+}
+
 export type SellerLevelId = 'new' | 'level1' | 'level2' | 'top';
 export type ClientLevelId = 'new' | 'trusted' | 'regular';
 
@@ -212,6 +246,9 @@ export interface DB {
   tokens: Token[];
   blacklist: BlacklistEntry[];
   notices: Notice[];
+  points?: PointEntry[];
+  events?: ShopEvent[];
+  subscriptions?: Subscription[];
   nextOrderNumber: number;
   clockOffsetDays: number; // beta tool: simulate time passing
 }

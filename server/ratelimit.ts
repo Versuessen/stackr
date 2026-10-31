@@ -39,4 +39,5 @@ export const LIMITS = {
   commandAccount: [40, 60], // per account per minute
   messageAccount: [20, 600], // chat messages per account per 10 minutes
   orderAccount: [6, 3600], // new orders per account per hour
+  giftAccount: [10, 3600], // gift code attempts per account (and per IP) per hour
 } as const satisfies Record<string, readonly [number, number]>;

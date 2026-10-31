@@ -3,9 +3,9 @@
 // part of a command: in beta it is the local session, on the server it comes from the
 // session cookie. That keeps a client from acting as someone else.
 
-import type { Account, DB, FarmTier, ID, RatingTags, SellerProfile, TokenType } from '../domain/types.js';
+import type { Account, DB, FarmTier, ID, RatingTags, SellerProfile, SubscriptionPlan, TokenType } from '../domain/types.js';
 import {
-  ActionError, acceptTerms, advanceClock, approve, blacklistClient, cancelByClient, cancelBySeller, clearBlacklist,
+  ActionError, acceptTerms, buyToken, cancelSubscription, endEvent, grantPoints, setSubscription, startEvent, advanceClock, approve, blacklistClient, cancelByClient, cancelBySeller, clearBlacklist,
   clearOrder, complain, confirmName, declineOrder, deliverBatch, grantToken, markNoticesRead, placeOrder, proposeTerms, rate,
   sendMessage, setVacation, startFulfilling, startProcessing, toggleService, updateSeller, type OrderInput,
 } from './actions.js';
@@ -31,6 +31,12 @@ export type Command =
   | { type: 'grantToken'; clientId: ID; tokenType: TokenType }
   | { type: 'markNoticesRead' }
   | { type: 'confirmName'; clientId: ID }
+  | { type: 'buyToken'; tokenType: TokenType }
+  | { type: 'grantPoints'; clientId: ID; n: number; note: string }
+  | { type: 'startEvent'; name: string; multiplier: number; days: number }
+  | { type: 'endEvent' }
+  | { type: 'setSubscription'; clientId: ID; plan: SubscriptionPlan; months: number }
+  | { type: 'cancelSubscription'; clientId: ID }
   | { type: 'advanceClock'; days: number }; // beta only, refused by the server
 
 export type CommandType = Command['type'];
@@ -38,7 +44,7 @@ export type CommandType = Command['type'];
 /** Commands only the seller may send. The server also requires a finished 2FA step for these. */
 export const SELLER_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>([
   'proposeTerms', 'clearOrder', 'startProcessing', 'startFulfilling', 'deliverBatch', 'declineOrder', 'cancelBySeller',
-  'updateSeller', 'setVacation', 'toggleService', 'blacklistClient', 'clearBlacklist', 'grantToken', 'confirmName',
+  'updateSeller', 'setVacation', 'toggleService', 'blacklistClient', 'clearBlacklist', 'grantToken', 'confirmName', 'grantPoints', 'startEvent', 'endEvent', 'setSubscription', 'cancelSubscription',
 ]);
 export const BETA_ONLY_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['advanceClock']);
 
@@ -73,6 +79,12 @@ export function toMut(cmd: Command, actor: Account, onId: (id: ID) => void = () 
     case 'grantToken': return grantToken(a, cmd.clientId, cmd.tokenType);
     case 'markNoticesRead': return markNoticesRead(a);
     case 'confirmName': return confirmName(a, cmd.clientId);
+    case 'buyToken': return buyToken(a, cmd.tokenType);
+    case 'grantPoints': return grantPoints(a, cmd.clientId, cmd.n, cmd.note);
+    case 'startEvent': return startEvent(a, cmd.name, cmd.multiplier, cmd.days);
+    case 'endEvent': return endEvent(a);
+    case 'setSubscription': return setSubscription(a, cmd.clientId, cmd.plan, cmd.months);
+    case 'cancelSubscription': return cancelSubscription(a, cmd.clientId);
     case 'advanceClock': return advanceClock(cmd.days);
   }
 }

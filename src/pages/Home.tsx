@@ -1,72 +1,63 @@
+import { FARM_ICON } from '../ui/Pixel';
+import { farmDef } from '../domain/farms';
 import React, { useState } from 'react';
 import { useStore } from '../data/store';
 import { Link, useRouter } from '../ui/router';
 import { useSearch } from '../ui/search';
 import { Glyph, ICONS, PORTRAIT, PixelArt, SceneArt, iconFor, sceneBg, scenes } from '../ui/Pixel';
-import { useDraggable, useReveal } from '../ui/motion';
+import { useReveal } from '../ui/motion';
+import { activeEvent } from '../domain/points';
 import { POPULAR, defaultUnit, type ItemCat } from '../domain/items';
 import { CONFIG, publicWaitDays, sellerStats } from '../domain/rules';
 import { fmtN } from '../ui/components';
 import type { Service } from '../domain/types';
 
 export const farmKey = (svc: Pick<Service, 'id'>) => svc.id.replace(/^seller-\d+-/, '');
-export const FARM_ICON: Record<string, keyof typeof ICONS> = { iron: 'iron', gold: 'gold', raid: 'raid', wool: 'wool', tree: 'tree', stone: 'stone' };
-const FARM_DAYS: Record<string, number> = { iron: 2, gold: 3, raid: 4, wool: 2, tree: 2, stone: 1 };
-
-export function Win({ title, open, onToggle, toggleLabel, style, bar, className = '', children, id }: {
-  title: string; open: boolean; onToggle: () => void; toggleLabel: string; style?: React.CSSProperties;
-  bar: React.HTMLAttributes<HTMLDivElement>; className?: string; children: React.ReactNode; id?: string;
-}) {
-  const { t } = useStore();
-  return (
-    <div className={`win ${className}`} style={style} id={id}>
-      <div className="win-bar drag" role="group" aria-label={t('win.label', { title })} {...bar}>
-        <span className="win-title"><span className="win-dots" aria-hidden="true"><i /><i /><i /></span><span className="t-label">{title}</span></span>
-        <button className="icon-btn" type="button" aria-label={toggleLabel} aria-expanded={open} onClick={onToggle}><Glyph name={open ? 'minus' : 'plus'} size={12} /></button>
-      </div>
-      {open && children}
-    </div>
-  );
-}
+const FARM_DAYS = (key: string) => farmDef(key)?.days[0] ?? 3;
 
 function Hero() {
-  const { t, theme } = useStore();
-  const { setQ, setSet } = useSearch();
+  const { t, theme, db, now } = useStore();
+  const { setSet } = useSearch();
   const [scene, setScene] = useState(0);
-  const [open, setOpen] = useState(true);
-  const drag = useDraggable();
   const all = scenes.hero();
   const names = [t('world.overworld'), t('world.nether'), t('world.end')];
   const sw = ['#5fb8ee', '#943434', '#9a6fb0'];
   const bgs = [sceneBg(all[0], theme), '#2a0c10', '#140f24'];
+  const s = db.sellers[0];
+  const ev = activeEvent(db, now);
   return (
     <section className="wrap" style={{ paddingTop: 24 }} aria-label={t('home.welcome')}>
       <div className="hero frame" style={{ background: bgs[scene] }}>
-        {all.map((s, i) => <div key={i} className="hero-scene" style={{ opacity: i === scene ? 1 : 0 }}><SceneArt scene={s} /></div>)}
-        <Win className="hero-win" title="Bestellung.exe" open={open} onToggle={() => setOpen(!open)} toggleLabel={open ? t('win.collapse') : t('win.expand')} style={drag.style} bar={drag.bar}>
-          <div className="hero-body">
-            <p className="t-label mute eyebrow">{t('home.kicker')}</p>
-            <h1 className="d-xl">Stackr</h1>
-            <p className="accent" style={{ maxWidth: '20ch' }}>{t('home.claim')}</p>
-            <div className="hero-cta">
-              <Link to={{ page: 'items' }} className="btn btn-primary btn-lg" onClick={() => { setSet(''); }}>{t('home.ctaItems')} <Glyph name="arrow" size={14} /></Link>
-              <Link to={{ page: 'farm', id: 'iron' }} className="btn btn-secondary btn-lg">{t('home.ctaFarm')}</Link>
-            </div>
-            <div className="hero-pop">
-              <span className="t-small mute">{t('home.popular')}</span>
-              {['netherite_ingot', 'elytra', 'shulker_box'].map((id) => (
-                <Link key={id} to={{ page: 'items' }} className="chip" onClick={() => { setSet(''); setQ(t(`item.${id}`)); }}>{t(`item.${id}`)}</Link>
-              ))}
-            </div>
+        {all.map((sc, i) => <div key={i} className="hero-scene" style={{ opacity: i === scene ? 1 : 0 }}><SceneArt scene={sc} /></div>)}
+        <div className="hero-panel">
+          <p className="t-label mute eyebrow">{t('home.kicker')}</p>
+          <h1 className="d-xl">Stackr</h1>
+          <p className="accent hero-claim">{t('home.claim')}</p>
+          <div className="hero-cta">
+            <Link to={{ page: 'items' }} className="btn btn-primary btn-lg" onClick={() => { setSet(''); }}>{t('home.ctaItems')} <Glyph name="arrow" size={14} /></Link>
+            <Link to={{ page: 'farm', id: 'iron' }} className="btn btn-secondary btn-lg">{t('home.ctaFarm')}</Link>
           </div>
-        </Win>
+          <div className="hero-pop">
+            <span className="t-small mute">{t('home.popular')}</span>
+            {['netherite_ingot', 'elytra', 'shulker_box'].map((id) => (
+              <Link key={id} to={{ page: 'item', id }} className="chip">{t(`item.${id}`)}</Link>
+            ))}
+          </div>
+          {s && (
+            <p className="hero-status t-small">
+              <span className={`status ${s.accepting && !s.vacation.on ? '' : 'away'}`}><i aria-hidden="true" />{s.accepting && !s.vacation.on ? t('home.open') : t('home.closed')}</span>
+              <span className="mute">·</span> <span>{t('home.waitNow', { n: publicWaitDays(db, s) })}</span>
+              {ev && <><span className="mute">·</span> <Link to={{ page: 'shop' }} className="tlink">{t('shop.eventOn', { name: ev.name, x: ev.multiplier })}</Link></>}
+            </p>
+          )}
+        </div>
         <div className="scene-tabs" role="radiogroup" aria-label={t('home.sceneLabel')}>
           {names.map((n, i) => (
             <button key={n} type="button" role="radio" aria-checked={i === scene} onClick={() => setScene(i)}><span className="sw" style={{ background: sw[i] }} aria-hidden="true" />{n}</button>
           ))}
         </div>
       </div>
-    </section>
+          </section>
   );
 }
 
@@ -85,7 +76,7 @@ function Facts() {
 }
 
 function Categories() {
-  const { t, items, lang } = useStore();
+  const { t, items, lang, db } = useStore();
   const { setCat, setQ, setSet } = useSearch();
   const [ref, cls] = useReveal<HTMLUListElement>();
   const count = (c: ItemCat) => items.filter((it) => it.cat === c).length;
@@ -107,7 +98,7 @@ function Categories() {
             <Link to={c.farm ? { page: 'farm', id: c.farm } : { page: 'items' }} className="cat" onClick={() => { if (c.cat) { setCat(c.cat); setQ(''); setSet(''); } }}>
               <span className="cat-img"><PixelArt art={ICONS[c.icon]} size={64} /></span>
               <span className="cat-name">{t(c.key)}</span>
-              <span className="t-small mute num">{c.cat ? t('home.nItems', { n: fmtN(count(c.cat), lang) }) : c.farm === 'custom' ? t('home.customMeta') : t('home.farmsMeta')}</span>
+              <span className="t-small mute num">{c.cat ? t('home.nItems', { n: fmtN(count(c.cat), lang) }) : c.farm === 'custom' ? t('home.customMeta') : t('home.farmsMeta', { n: db.services.filter((x) => x.kind === 'farm' && x.active).length })}</span>
             </Link>
           </li>
         ))}
@@ -148,12 +139,13 @@ function Worlds() {
 function Services() {
   const { t, db, lang, theme } = useStore();
   const [ref, cls] = useReveal<HTMLUListElement>();
-  const farms = db.services.filter((x) => x.kind === 'farm' && x.active);
+  const all = db.services.filter((x) => x.kind === 'farm' && x.active);
+  const farms = all.filter((x) => farmDef(farmKey(x))?.popular).slice(0, 8);
   return (
     <section className="wrap sec" aria-labelledby="h-gigs">
       <div className="sec-head">
         <div><p className="t-label eyebrow ink2">{t('nav.farms')}</p><h2 className="d-m" id="h-gigs">{t('home.gigsTitle')}</h2></div>
-        <Link to={{ page: 'farm', id: 'iron' }} className="tlink">{t('home.allFarms')} <Glyph name="arrow" size={14} /></Link>
+        <Link to={{ page: 'farm', id: 'iron' }} className="tlink">{t('home.allFarmsN', { n: all.length })} <Glyph name="arrow" size={14} /></Link>
       </div>
       <ul className={`gigs plain rise ${cls}`} ref={ref}>
         {farms.map((svc, i) => {
@@ -161,14 +153,14 @@ function Services() {
           return (
             <li key={svc.id} style={{ ['--d' as string]: `${i * 40}ms` }}>
               <Link to={{ page: 'farm', id: key }} className="gig">
-                <span className="gig-img frame" style={{ background: key === 'gold' ? '#2a0c10' : sceneBg(sc, theme) }}>
+                <span className="gig-img frame" style={{ background: farmDef(key)?.scene === 'nether' ? '#2a0c10' : farmDef(key)?.scene === 'end' ? '#140f24' : sceneBg(sc, theme) }}>
                   <SceneArt scene={sc} />
                   <span className="gig-ic"><PixelArt art={ICONS[FARM_ICON[key] ?? 'iron']} size={36} /></span>
                 </span>
                 <span className="gig-body">
                   <span className="t-title gig-title">{svc.name[lang]}</span>
                   <span className="t-small ink2">{svc.description[lang]}</span>
-                  <span className="gig-meta"><span className="badge b-line">{t('home.tierRange')}</span><span className="t-small mute">~{t('common.nDays', { n: FARM_DAYS[key] ?? 3 })}</span></span>
+                  <span className="gig-meta"><span className="badge b-line">{t('home.tierRange')}</span><span className="t-small mute">~{t('common.nDays', { n: FARM_DAYS(key) })}</span></span>
                 </span>
               </Link>
             </li>
@@ -197,7 +189,7 @@ function Popular() {
           return (
             <li key={it!.id} className="pop card">
               <span className="pop-img"><PixelArt art={iconFor(it!)} size={72} /></span>
-              <span className="pop-body"><span className="pop-name">{lang === 'de' ? it!.de : it!.en}</span><span className="t-small mute">{it!.stack > 1 ? t('item.stackN', { n: it!.stack }) : t('item.unstackable')}</span></span>
+              <span className="pop-body"><Link to={{ page: 'item', id: it!.id }} className="pop-name">{lang === 'de' ? it!.de : it!.en}</Link><span className="t-small mute">{it!.stack > 1 ? t('item.stackN', { n: it!.stack }) : t('item.unstackable')}</span></span>
               <button type="button" className={`btn btn-secondary btn-sm btn-block ${done[it!.id] ? 'done' : ''}`}
                 aria-label={t('home.addAria', { unit: t(`unit.${unit}`), name: lang === 'de' ? it!.de : it!.en })}
                 onClick={() => { addToCart(it!, 1, unit); setDone((d) => ({ ...d, [it!.id]: true })); window.setTimeout(() => setDone((d) => ({ ...d, [it!.id]: false })), 1600); }}>
@@ -211,23 +203,31 @@ function Popular() {
   );
 }
 
-export const FLOW_COLORS = ['#c9ced4', '#a7adb5', '#8b8f97', '#4fd8d0', '#2bb39b', 'var(--lapis)', 'var(--slime)'];
+const STEPS: { key: string; icon: keyof typeof ICONS; who: 'you' | 'both' | 'me' }[] = [
+  { key: 'pick', icon: 'scroll', who: 'you' },
+  { key: 'terms', icon: 'emerald', who: 'both' },
+  { key: 'build', icon: 'pick', who: 'me' },
+  { key: 'done', icon: 'heart', who: 'you' },
+];
 function Flow() {
   const { t } = useStore();
-  const [ref, cls] = useReveal<HTMLOListElement>();
-  const steps = ['received', 'cleared', 'processing', 'fulfilling', 'delivered', 'review', 'completed'];
   return (
     <section id="ablauf" className="wrap sec" aria-labelledby="h-flow">
       <div className="sec-head">
         <div><p className="t-label eyebrow ink2">{t('nav.how')}</p><h2 className="d-m" id="h-flow" style={{ maxWidth: '26ch' }}>{t('home.flowTitle')}</h2></div>
+        <Link to={{ page: 'terms' }} className="tlink">{t('rules.all')} <Glyph name="arrow" size={14} /></Link>
       </div>
-      <ol className={`flow plain rise ${cls}`} ref={ref}>
-        {steps.map((s, i) => (
-          <li key={s} className="flow-step" style={{ ['--d' as string]: `${i * 70}ms` }}>
-            <span className="flow-block" style={{ background: FLOW_COLORS[i] }} aria-hidden="true" />
-            <span className="t-label mute num">0{i + 1} · {t(`flow.who.${s}`)}</span>
-            <span className="t-title">{t(`track.${s}`)}</span>
-            <span className="t-small ink2">{t(`flow.body.${s}`, { n: CONFIG.approvalWindowDays })}</span>
+      <ol className="steps plain">
+        {STEPS.map((s, i) => (
+          <li key={s.key} className="step card">
+            <span className="step-top">
+              <span className="step-n num" aria-hidden="true">{i + 1}</span>
+              <span className={`badge ${s.who === 'me' ? 'b-ink' : s.who === 'both' ? 'b-info' : 'b-line'}`}>{t(`flow.who.${s.who}`)}</span>
+              <span className="step-ic" aria-hidden="true"><PixelArt art={ICONS[s.icon] ?? ICONS.cube} size={32} /></span>
+            </span>
+            <span className="t-title">{t(`flow.${s.key}.h`)}</span>
+            <span className="t-small ink2">{t(`flow.${s.key}.b`, { n: CONFIG.approvalWindowDays })}</span>
+            <span className="t-small mute step-see">{t(`flow.${s.key}.see`)}</span>
           </li>
         ))}
       </ol>
@@ -235,12 +235,12 @@ function Flow() {
   );
 }
 
+const RULES = ['price', 'pay', 'slots', 'cancel', 'check', 'site', 'fair', 'block'];
+
 function About() {
   const { t, db, lang } = useStore();
   const s = db.sellers[0];
   const st = s ? sellerStats(db, s.id) : null;
-  const rules = useDraggable();
-  const [open, setOpen] = useState(true);
   const stickers: [keyof typeof ICONS, number, React.CSSProperties][] = [['heart', -10, { right: -22, top: 40 }], ['pick', 12, { left: -24, top: '46%' }], ['pearl', -6, { right: 18, bottom: -22 }]];
   return (
     <section id="ueber-mich" className="sec" aria-labelledby="h-me">
@@ -268,12 +268,13 @@ function About() {
               <Link to={{ page: 'farm', id: 'iron' }} className="btn btn-secondary">{t('home.meFarms')}</Link>
             </div>
           </div>
-          <Win id="regeln" className="rules-win" title="Regeln.txt" open={open} onToggle={() => setOpen(!open)} toggleLabel={open ? t('win.collapse') : t('win.expand')} style={rules.style} bar={rules.bar}>
+          <section id="regeln" className="rules-card card" aria-labelledby="h-rules">
+            <h3 className="t-title" id="h-rules">{t('rules.title')}</h3>
             <ol className="rules">
-              {['openLimit', 'price', 'cancel', 'check', 'malicious'].map((k) => <li key={k}><b>{t(`rules.${k}.h`, { n: CONFIG.maxOpenOrdersPerClient, d: CONFIG.approvalWindowDays })}</b> {t(`rules.${k}.b`)}</li>)}
+              {RULES.map((k) => <li key={k}><b>{t(`rules.${k}.h`, { n: CONFIG.maxOpenOrdersPerClient, d: CONFIG.approvalWindowDays })}</b> <span className="ink2">{t(`rules.${k}.b`, { n: CONFIG.maxOpenOrdersPerClient, d: CONFIG.approvalWindowDays })}</span></li>)}
             </ol>
-            <Link to={{ page: 'terms' }} className="tlink" style={{ padding: '0 20px 12px' }}>{t('rules.all')} <Glyph name="arrow" size={14} /></Link>
-          </Win>
+            <Link to={{ page: 'terms' }} className="tlink">{t('rules.all')} <Glyph name="arrow" size={14} /></Link>
+          </section>
         </div>
       </div>
     </section>
@@ -293,10 +294,11 @@ function Statement() {
     <section className="statement dark" aria-labelledby="h-why">
       <div className="wrap statement-in">
         <span className="badge b-slime">{t('home.whyBadge')}</span>
-        <h2 id="h-why" ref={ref} className={`statement-text rise ${cls}`}>{t('home.whyA')} <span className="px-word">Stackr</span>.</h2>
+        <h2 id="h-why" ref={ref} className={`statement-text rise ${cls}`}>{t('home.whyA')} <span className="px-word">{t('home.whyB')}</span></h2>
+        <p className="t-lead statement-body">{t('home.whyBody')}</p>
         <div className="hero-cta">
-          <Link to={{ page: 'items' }} className="btn btn-slime btn-lg">{t('home.ctaItems')} <Glyph name="arrow" size={14} /></Link>
-          <Link to={{ page: 'farm', id: 'iron' }} className="btn btn-secondary btn-lg">{t('home.ctaFarm')}</Link>
+          <Link to={{ page: 'farm', id: 'custom' }} className="btn btn-slime btn-lg">{t('home.meWrite')} <Glyph name="arrow" size={14} /></Link>
+          <Link to={{ page: 'shop' }} className="btn btn-secondary btn-lg">{t('nav.shop')}</Link>
         </div>
         <div className="floaters" aria-hidden="true">
           {floaters.map((ic, i) => <Floater key={ic} icon={ic} rot={[-8, 6, -3, 10, -5][i]} delay={i * 70} />)}

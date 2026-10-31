@@ -100,6 +100,21 @@ export function dayScene(W, H, seed, build) {
   } else if (build === 'stone') {
     var gx2 = focus - 8;
     rect(g, gx2, base - 12, 17, 12, 'k'); rect(g, gx2 + 2, base - 10, 5, 8, 'a'); rect(g, gx2 + 10, base - 10, 5, 8, 'v'); rect(g, gx2 + 7, base - 8, 3, 6, 'o'); rect(g, gx2 + 6, base - 13, 5, 1, 'K');
+  } else if (build === 'cane' || build === 'bamboo' || build === 'kelp') {
+    var cx2 = focus - 14, tall = build === 'bamboo' ? 16 : 7;
+    rect(g, cx2, base - 1, 29, 1, 'a');
+    for (var cc = 0; cc < 9; cc++) { var hh = tall - (cc % 3); rect(g, cx2 + 1 + cc * 3, base - 1 - hh, 1, hh, build === 'kelp' ? 'G' : 'L'); put(g, cx2 + 1 + cc * 3, base - 2 - hh, 'l'); }
+    rect(g, cx2 - 1, base - 3, 1, 3, 'k'); rect(g, cx2 + 29, base - 3, 1, 3, 'k');
+  } else if (build === 'crops' || build === 'flower' || build === 'bonemeal' || build === 'pumpkin') {
+    var fx2 = focus - 16;
+    rect(g, fx2, base - 1, 33, 2, 'D');
+    for (var row = 0; row < 11; row++) { var col2 = build === 'flower' ? ['P', 'y', 'e', 'u'][row % 4] : build === 'pumpkin' ? (row % 2 ? 'v' : 'M') : build === 'bonemeal' ? 'u' : 'y'; rect(g, fx2 + 1 + row * 3, base - 3, 2, 2, col2); put(g, fx2 + 1 + row * 3, base - 4, 'L'); }
+    rect(g, fx2 + 13, base - 12, 7, 9, 'c'); rect(g, fx2 + 12, base - 13, 9, 1, 'C'); rect(g, fx2 + 15, base - 6, 3, 3, 'C');
+  } else if (build === 'generic') {
+    var gx3 = focus - 10, tp = base - 22;
+    rect(g, gx3, tp, 21, base - tp, 'k'); rect(g, gx3 - 1, tp - 1, 23, 2, 'K');
+    rect(g, gx3 + 3, tp + 3, 15, 6, 'q'); rect(g, gx3 + 3, tp + 11, 15, 6, 'q');
+    rect(g, gx3 + 8, base - 3, 5, 3, 'c'); rect(g, gx3 + 9, base - 2, 3, 1, 'C');
   } else if (build === 'raid') {
     var rx = focus - 10, rt = base - 30;
     rect(g, rx + 8, rt, 4, base - rt, 'k'); rect(g, rx, rt - 3, 21, 3, 'K'); rect(g, rx + 2, rt - 2, 17, 1, 'b');
@@ -162,6 +177,18 @@ export const ART = {
   box: layers(['............', '.oooooooooo.', '.occcccccco.', '.obbbbbbbbo.', '.oaaaaaaaao.', '.oooddddooo.', '.obbbddbbbo.', '.obbbbbbbbo.', '.obbbbbbbbo.', '.oaaaaaaaao.', '.oooooooooo.', '............'], { o: '#2a1f3d', a: '#6b4a8a', b: '#9a6fb0', c: '#b48ac4', d: '#f2e8f6' }),
   diamond: layers(['............', '.oooooooooo.', '.occcccccco.', '.obbcbbbcbo.', '.obbbbcbbbo.', '.ocbbbbbbbo.', '.obbbcbbbco.', '.obcbbbbbbo.', '.obbbbcbbbo.', '.oaaaaaaaao.', '.oooooooooo.', '............'], { o: '#0c4a48', a: '#2bb3ad', b: '#4fd8d0', c: '#b9f5f0' }),
   totem: layers(mirror(['...ooo', '..occc', '..ocdc', '..occc', '.oobbb', 'obbbbb', '.oobbb', '...obb', '...obb', '..oobb', '..oooo', '......']), { o: '#5a3a0a', b: '#e0b040', c: '#f2c94c', d: '#2f9a5a' }),
+  cane: layers(['............', '...o....o...', '..obo..obo..', '..oco..oco..', '..obo..obo..', '..obo.oobo..', '..oco.obco..', '..obooobbo..', '..obo..obo..', '..oco..oco..', '..obo..obo..', '............'], { o: '#1f4a1a', b: '#6cc04a', c: '#a8e07a' }),
+  bamboo: layers(['............', '....o.......', '...obo..o...', '...oco.obo..', '...obo.obo..', '...obooobo..', '...obo.oco..', '...oco.obo..', '...obo.obo..', '...obo.oco..', '...obo.obo..', '............'], { o: '#2c4a12', b: '#8fbf3a', c: '#c9e27a' }),
+  rocket: layers(['.....oo.....', '....obbo....', '....obbo....', '...occcco...', '...occcco...', '...obbbbo...', '...occcco...', '...obbbbo...', '...oooooo...', '....oddo....', '.....dd.....', '....d..d....'], { o: '#17151c', b: '#e04a3a', c: '#f6f3ec', d: '#f2b84a' }),
+  bone: layers(['............', '.oo.........', 'obbo........', 'obbbo.......', '.obbbo......', '..obbbo.....', '...obbbo....', '....obbbo...', '.....obbbo..', '......obbbo.', '.......obbo.', '........oo..'], { o: '#6b6455', b: '#f2eee2' }),
+  flower: layers(['............', '....oooo....', '...obccbo...', '...occcco...', '...obccbo...', '....oooo....', '.....od.....', '..oo.od.oo..', '..odoodood..', '...oodddo...', '.....od.....', '............'], { o: '#1d2b18', b: '#e04a6a', c: '#f6d33a', d: '#4f9a3a' }),
+  wheat: layers(['............', '...o..o..o..', '..oco.oco.o.', '..oco.ococo.', '...occocco..', '....occco...', '.....oco....', '.....obo....', '.....obo....', '....oobbo...', '.....obo....', '............'], { o: '#5a4210', b: '#8a6a20', c: '#e8c45a' }),
+  rod: layers(['............', '........oo..', '.......oco..', '......oco...', '.....oco....', '....oco.....', '...oco......', '..oco.......', '.oco........', '.oo.........', '............', '............'], { o: '#6a3a06', c: '#f2c94c' }),
+  skull: layers(['............', '..oooooooo..', '.obbbbbbbbo.', '.obbbbbbbbo.', '.ooobbbbooo.', '.ooobbbbooo.', '.obbbobbbbo.', '.obbbbbbbbo.', '..obobobbo..', '..oooooooo..', '............', '............'], { o: '#0c0c10', b: '#3a3b40' }),
+  emerald: layers(['............', '....oooo....', '...obbbbo...', '..obccbbbo..', '..obcbbbbo..', '..obbbbbao..', '..obbbbbao..', '..obbbbaao..', '...obbaao...', '....oooo....', '............', '............'], { o: '#0a3a20', a: '#178a4a', b: '#2fc46e', c: '#b9f5cf' }),
+  slime: layers(['............', '.oooooooooo.', '.obbbbbbbbo.', '.obcbbbbcbo.', '.obddbbddbo.', '.obddbbddbo.', '.obbbbbbbbo.', '.obbbddbbbo.', '.obbbbbbbbo.', '.oaaaaaaaao.', '.oooooooooo.', '............'], { o: '#1f5a1a', a: '#4f9a3a', b: '#7ac85a', c: '#b8ec98', d: '#2d6e24' }),
+  kelp: layers(['............', '.....oo.....', '....obo.....', '....oboo....', '.....obbo...', '....oobo....', '...obbo.....', '....oboo....', '.....obbo...', '....oobo....', '....obo.....', '............'], { o: '#0f2a16', b: '#3e7a3a' }),
+  pumpkin: layers(['............', '.....oo.....', '....odo.....', '.oooooooooo.', 'obbcbbcbbcbo', 'obbcbbcbbcbo', 'obbcbbcbbcbo', 'obbcbbcbbcbo', 'obbcbbcbbcbo', '.oooooooooo.', '............', '............'], { o: '#6a3008', b: '#e8902a', c: '#c06a14', d: '#4f9a3a' }),
   heart: layers(mirror(['......', '.ooo..', 'obbbo.', 'obcbbo', 'obbbbb', '.obbbb', '..obbb', '...obb', '....ob', '.....o', '......', '......']), { o: '#17151c', b: 'var(--slime)', c: '#ffffff' })
 };
 export const FACE = layers(['hhhhhhhh', 'hggggggh', 'hhsshhss', 'ssssssss', 'sewsswes', 'ssssssss', 'sssmmsss', 'ssssssss'], { h: '#2a1f2e', g: 'var(--slime)', s: '#e8b996', w: '#ffffff', e: '#17151c', m: '#a4553f' });
